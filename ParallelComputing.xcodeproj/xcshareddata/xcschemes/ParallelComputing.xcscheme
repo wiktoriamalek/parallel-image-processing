@@ -62,7 +62,7 @@
             isEnabled = "YES">
          </CommandLineArgument>
          <CommandLineArgument
-            argument = "wynik.png"
+            argument = "TEST.png"
             isEnabled = "YES">
          </CommandLineArgument>
          <CommandLineArgument

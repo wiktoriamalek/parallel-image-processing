@@ -1,0 +1,23 @@
+# Xcode / macOS
+.DS_Store
+DerivedData/
+build/
+*.xcuserdata/
+xcuserdata/
+*.xcuserstate
+
+# Xcode project user settings
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Compiled files
+*.o
+*.out
+*.dSYM/

@@ -29,3 +29,15 @@ Image thresholding(const Image& image)
     return result;
 }
 
+void ThresholdRange(Image& image, int threshold, std::size_t min, std::size_t max)
+{
+    for (std::size_t i = min; i < max; ++i) {
+        if (image.pixels[i] < threshold) {
+            image.pixels[i] = 0;
+        }
+        else {
+            image.pixels[i] = 255;
+        }
+    }
+}
+

@@ -5,12 +5,22 @@
 int main() {
     try {
         Image image = loadImage("images/clic_image.png");
-        Image processed = thresholding(image);
+        Image single = thresholding(image);
+        Image divided = image;
+        std::size_t Npixels = divided.pixels.size();
+        std::size_t middle = Npixels / 2;
+
+        ThresholdRange(divided, 128, 0, middle);
+        ThresholdRange(divided,  128, middle, 0);
+
+        std::cout << "Single pixels: " <<single.pixels.size() << std::endl;
+        std::cout << "Divided: " << divided.pixels.size() << std::endl;
+
         std::cout << "Width:" << image.width << " " << " Height:" <<image.height;
         if (!image.pixels.empty()) {
             std::cout << " First pixel:" << static_cast<int>(image.pixels.front()) << " ";
         };
-        saveImage("results/clic_threshold.png", processed);
+        saveImage("results/clic_threshold.png", single);
 
         Image copy = loadImage("results/clic_copy.png");
 
@@ -21,7 +31,7 @@ int main() {
             std::cout << " Images are identical!" << std::endl;
         }
 
-        std::cout << "Image.pixels[0]: " << static_cast<int>(image.pixels[0]) << " " <<  "result.pixels[0]: " << static_cast<int>(processed.pixels[0]) << " ";
+        std::cout << "Image.pixels[0]: " << static_cast<int>(image.pixels[0]) << " " <<  "result.pixels[0]: " << static_cast<int>(single.pixels[0]) << " ";
     }
     catch (const std::exception& e)
     {

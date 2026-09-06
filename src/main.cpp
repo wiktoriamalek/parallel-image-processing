@@ -1,6 +1,8 @@
 #include "image_io.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <thread>
+#include <functional>
 
 int main() {
     try {
@@ -10,8 +12,20 @@ int main() {
         std::size_t Npixels = divided.pixels.size();
         std::size_t middle = Npixels / 2;
 
-        ThresholdRange(divided, 128, 0, middle);
-        ThresholdRange(divided,  128, middle, 0);
+        // let's create threads
+        std::thread t1(ThresholdRange, std::ref(divided), 128, 0, middle);
+        std::thread t2(ThresholdRange, std::ref(divided), 128, middle, Npixels);
+
+        t1.join();
+        t2.join(); // waiting for both to finish
+
+        if (single.pixels == divided.pixels) {
+            std::cout << " Image are identical!" << std::endl;
+        }
+
+        // previous test!
+        // ThresholdRange(divided, 128, 0, middle);
+        // ThresholdRange(divided,  128, middle, Npixels);
 
         std::cout << "Single pixels: " <<single.pixels.size() << std::endl;
         std::cout << "Divided: " << divided.pixels.size() << std::endl;

@@ -3,6 +3,9 @@
 #include <iostream>
 #include <vector>
 #include "image_io.hpp"
+#include <fstream>
+#include <sstream>
+#include <string>
 
 int main() {
     Image image = loadImage("images/clic_image.png");
@@ -67,6 +70,93 @@ int main() {
                 return 1;
             }
             std::cout << "Buffer write successfully!\n";
+
+            // here we now add a kernel
+
+            std::ifstream kernelFile("kernels/threshold.cl");
+            if (!kernelFile) {
+                std::cerr << "Kernel file not found!\n";
+                return 1;
+            }
+            std::stringstream kernelStream;
+            kernelStream << kernelFile.rdbuf();
+            std::string kernelSource = kernelStream.str();
+
+            const char* source = kernelSource.c_str();
+                                                        // OpenCL environment, 1 source code fragment, kernel text address, OpenCL will set the text length, error code
+            cl_program program = clCreateProgramWithSource(context, 1, &source, nullptr, &error);
+            if (error != CL_SUCCESS) {
+                std::cerr << "Program creation failed: " << error << '\n';
+                return 1;
+            }
+            error = clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr); // OpenCL compile this program to the device - mac
+            if (error != CL_SUCCESS) {
+                std::cerr << "Program build failed because of syntax error in threshold.cl: " << error << '\n';
+                return 1;
+            }
+
+            std::cout << "Program build successfully!\n";
+
+            cl_kernel kernel = clCreateKernel(program, "threshold_kernel", &error);
+            if (error != CL_SUCCESS) {
+                std::cerr << "Kernel creation failed: " << error << '\n';
+                return 1;
+            }
+            std::cout << "Kernel created successfully!\n";
+
+            error = clSetKernelArg(kernel, 0, sizeof(cl_mem), &buffer); // which kernel do I set an argument for, argument number, argument size, argument content address
+            if (error != CL_SUCCESS) {
+                std::cerr << "Kernel set argument failed: " << error << '\n';
+                return 1;
+            }
+            std::cout << "Kernel set argument successfully!\n";
+
+            int threshold = 128;
+
+            error = clSetKernelArg(kernel, 1, sizeof(int), &threshold);
+
+            if (error != CL_SUCCESS) {
+                std::cerr << "Threshold argument failed: " << error << '\n';
+                return 1;
+            }
+
+            std::size_t globalWorkSize = image.pixels.size();
+
+            error = clEnqueueNDRangeKernel(queue, kernel, 1, nullptr, &globalWorkSize, nullptr, 0, nullptr, nullptr);
+
+            if (error != CL_SUCCESS) {
+                std::cerr << "Kernel launch failed: " << error << '\n';
+                return 1;
+            }
+
+            std::cout << "Kernel launched successfully!\n";
+
+            Image gpuResult = image;
+            error = clEnqueueReadBuffer(queue, buffer, CL_TRUE, 0, bufferSize, gpuResult.pixels.data(), 0, nullptr, nullptr); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
+
+            if (error != CL_SUCCESS) {
+                std::cerr << "Buffer read failed: " << error << '\n';
+                return 1;
+            }
+            std::cout << "Buffer read successfully!\n";
+            Image cpuResult = thresholding(image);
+
+            if (cpuResult.pixels == gpuResult.pixels) {
+                std::cout << "GPU and CPU results are identical!" << std::endl;
+            }
+            else {
+                std::cerr << "GPU and CPU results are not identical!" << std::endl;
+            }
+            saveImage("results/clic_threshold_gpu.png", gpuResult);
+
+
+
+
+
+
+
+            clReleaseKernel(kernel);
+            clReleaseProgram(program);
             clReleaseMemObject(buffer);
             clReleaseCommandQueue(queue);
             clReleaseContext(context);

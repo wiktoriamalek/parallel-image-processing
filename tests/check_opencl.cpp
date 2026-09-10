@@ -149,12 +149,6 @@ int main() {
             }
             saveImage("results/clic_threshold_gpu.png", gpuResult);
 
-
-
-
-
-
-
             clReleaseKernel(kernel);
             clReleaseProgram(program);
             clReleaseMemObject(buffer);

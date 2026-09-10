@@ -6,6 +6,6 @@ __kernel void threshold_kernel(__global unsigned char* pixels, int threshold) //
      }
     else
     {
-    pixels[i] = 255;
+        pixels[i] = 255;
     }
 }

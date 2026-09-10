@@ -10,32 +10,62 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <algorithm>
+
+double median(std::vector<long long> values) {
+    std::sort(values.begin(), values.end());
+    std::size_t n = values.size();
+    if (n%2 == 1) {
+        return values[n/2];
+    }
+    return (values[n/2 - 1] + values[n/2])/2.0;
+}
 
 int main() {
     try {
-        Image image = loadImage("images/resolution_change/clic_8192.png");
-        Image divided = image;
+        Image image = loadImage("images/resolution_change/clic_16384.png");
+        int resolution = 16384;
 
         // test of 1-thread on CPU
-        auto start = std::chrono::high_resolution_clock::now();
-        Image singleCPUthread = thresholding(image);
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start);
-        std::cout <<"Time taken on single-thread CPU: " << duration.count() <<"us" << std::endl;
+        std::vector<long long> cpu1Times;
+
+        for (int repeat=0; repeat<100; repeat++) {
+            Image singleCPUthread = image;
+            std::size_t Npixels = singleCPUthread.pixels.size();
+            auto start = std::chrono::high_resolution_clock::now();
+            ThresholdRange(singleCPUthread, 128, 0, Npixels);
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start);
+            cpu1Times.push_back(duration.count());
+        }
+
+        double medianCPU1 = median(cpu1Times);
+        std::cout <<"Median time taken on single-thread CPU: " << medianCPU1 <<"us" << std::endl;
 
         // multi-thread CPU
-        auto start2 = std::chrono::high_resolution_clock::now();
-        std::size_t Npixels = divided.pixels.size();
-        std::size_t middle = Npixels / 2;
-        std::thread t1(ThresholdRange, std::ref(divided), 128, 0, middle);
-        std::thread t2(ThresholdRange, std::ref(divided), 128, middle, Npixels);
-        t1.join();
-        t2.join();
-        auto end2 = std::chrono::high_resolution_clock::now();
-        auto duration2 = std::chrono::duration_cast<std::chrono::microseconds>(end2-start2);
-        std::cout <<"Time taken on 2-threads on CPU: " << duration2.count() <<"us" << std::endl;
+        std::vector<long long> cpu2Times;
+        for (int repeat=0; repeat<100; repeat++) {
+            Image divided = image;
+            std::size_t Npixels = divided.pixels.size();
+            std::size_t middle = Npixels / 2;
+            auto start2 = std::chrono::high_resolution_clock::now();
+            std::thread t1(ThresholdRange, std::ref(divided), 128, 0, middle);
+            std::thread t2(ThresholdRange, std::ref(divided), 128, middle, Npixels);
+            t1.join();
+            t2.join();
+            auto end2 = std::chrono::high_resolution_clock::now();
+            auto duration2 = std::chrono::duration_cast<std::chrono::microseconds>(end2-start2);
+            cpu2Times.push_back(duration2.count());
+        }
+
+        double medianCPU2 = median(cpu2Times);
+        std::cout <<"Median time taken on 2-threads on CPU: " << medianCPU2 <<"us" << std::endl;
 
         // GPU
+        std::vector<long long> gpuKernelOnly;
+        std::vector<long long> gpuAll;
+
+        // Setup
         cl_uint platformCount = 0;
         cl_int error = clGetPlatformIDs(0, nullptr, &platformCount);
         std::vector<cl_platform_id> platforms(platformCount);
@@ -66,26 +96,48 @@ int main() {
                 error = clSetKernelArg(kernel, 1, sizeof(int), &threshold);
                 std::size_t globalWorkSize = image.pixels.size();
                 Image gpuResult = image;
-                auto gpuTotalStart = std::chrono::high_resolution_clock::now();
-                error = clEnqueueWriteBuffer(queue, buffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr);
-                auto kernelStart = std::chrono::high_resolution_clock::now();
-                error = clEnqueueNDRangeKernel(queue, kernel, 1, nullptr, &globalWorkSize, nullptr, 0, nullptr, nullptr);
-                error = clFinish(queue);
-                auto kernelEnd = std::chrono::high_resolution_clock::now();
-                error = clEnqueueReadBuffer(queue, buffer, CL_TRUE, 0, bufferSize, gpuResult.pixels.data(), 0, nullptr, nullptr); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
-                auto gpuTotalEnd = std::chrono::high_resolution_clock::now();
-                clReleaseKernel(kernel);
-                clReleaseProgram(program);
-                clReleaseMemObject(buffer);
-                clReleaseCommandQueue(queue);
-                clReleaseContext(context);
-                auto gpuTotalDuration = std::chrono::duration_cast<std::chrono::microseconds>(gpuTotalEnd - gpuTotalStart);
-                auto kernelDuration = std::chrono::duration_cast<std::chrono::microseconds>(kernelEnd - kernelStart);
-                std::cout << "GPU total (from writing to reading after kernel operations): " << gpuTotalDuration.count() << " us\n";
-                std::cout << "GPU kernel only: "<< kernelDuration.count() << " us\n";
 
-            }
+        for (int repeat=0; repeat<100; repeat++) {
+            auto gpuTotalStart = std::chrono::high_resolution_clock::now();
+            error = clEnqueueWriteBuffer(queue, buffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr);
+            auto kernelStart = std::chrono::high_resolution_clock::now();
+            error = clEnqueueNDRangeKernel(queue, kernel, 1, nullptr, &globalWorkSize, nullptr, 0, nullptr, nullptr);
+            error = clFinish(queue);
+            auto kernelEnd = std::chrono::high_resolution_clock::now();
+            error = clEnqueueReadBuffer(queue, buffer, CL_TRUE, 0, bufferSize, gpuResult.pixels.data(), 0, nullptr, nullptr); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
+            auto gpuTotalEnd = std::chrono::high_resolution_clock::now();
+            auto gpuTotalDuration = std::chrono::duration_cast<std::chrono::microseconds>(gpuTotalEnd - gpuTotalStart);
+            auto kernelDuration = std::chrono::duration_cast<std::chrono::microseconds>(kernelEnd - kernelStart);
+            gpuAll.push_back(gpuTotalDuration.count());
+            gpuKernelOnly.push_back(kernelDuration.count());
+                }
+            clReleaseKernel(kernel);
+            clReleaseProgram(program);
+            clReleaseMemObject(buffer);
+            clReleaseCommandQueue(queue);
+            clReleaseContext(context);
         }
+
+        }
+
+
+        double medianGPUAll = median(gpuAll);
+        double medianGPUKernel = median(gpuKernelOnly);
+
+        std::cout << "Median GPU total (from writing to reading after kernel operations): " << medianGPUAll << " us\n";
+        std::cout << "Median GPU kernel only: "<< medianGPUKernel << " us\n";
+
+
+        // Save everything to a CSV file
+        std::ofstream file("results/threshold_test_16384.csv", std::ios::app);
+        file << resolution << ","
+             << image.pixels.size() << ","
+             << medianCPU1 << ","
+             << medianCPU2 << ","
+             << medianGPUKernel << ","
+             << medianGPUAll << "\n";
+
+
         return 0;
     }
 

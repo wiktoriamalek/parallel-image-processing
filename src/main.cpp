@@ -38,6 +38,8 @@ int main() {
 
         Image copy = loadImage("results/clic_copy.png");
 
+
+
         if (image.width != copy.width || image.height != copy.height || image.pixels != copy.pixels) {
             throw std::runtime_error("Image are different");
         }

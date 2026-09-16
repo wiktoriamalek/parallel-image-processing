@@ -29,6 +29,15 @@ add_executable(thresholding_time_comparison
         tests/image_thresholding_io.cpp
 )
 
+add_executable(identity_convolution_test
+        src/convolution.cpp
+        tests/test_image_io.cpp
+        tests/convolution_test.cpp
+)
+
+target_include_directories(identity_convolution_test PRIVATE include)
+target_link_libraries(identity_convolution_test PRIVATE OpenCL::OpenCL)
+
 target_include_directories(thresholding_time_comparison PRIVATE include)
 target_link_libraries(thresholding_time_comparison PRIVATE OpenCL::OpenCL)
 

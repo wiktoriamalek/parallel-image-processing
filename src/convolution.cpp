@@ -4,13 +4,22 @@
 #include <cmath>
 
 Image convolution(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue = false) {
+    Image result = image;
+    convolution(image, kernel, absoluteValue, result);
+    return result;
+}
+
+void convolution(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue, Image& result) {
+    convolutionRows(image, kernel, absoluteValue, result, 1, image.height - 1);
+}
+
+void convolutionRows(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue, Image& result, int firstRow, int endRow) {
 
     // dont start from edges
     // y = 1...height-2
     // x = 1 ... width -2
-    Image result = image;
 
-    for (int y=1; y<image.height-1; y++) {
+    for (int y=firstRow; y<endRow; y++) {
         for (int x=1; x<image.width-1; x++) {
             float sum = 0.0f;
             // even though images are 2D, pixels are stored as one big 1D array
@@ -40,5 +49,4 @@ Image convolution(const Image& image, const std::array<std::array<float, 3>, 3>&
         }
     }
 
-    return result;
 }

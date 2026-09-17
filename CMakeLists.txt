@@ -45,6 +45,7 @@ target_link_libraries(thresholding_time_comparison PRIVATE OpenCL::OpenCL)
 add_executable(otsu_test
         src/otsu.cpp
         tests/otsu_test.cpp
+        tests/test_image_io.cpp
 )
 
 target_include_directories(otsu_test PRIVATE include)

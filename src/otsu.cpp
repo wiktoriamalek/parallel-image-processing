@@ -56,3 +56,14 @@ int calculateOtsuThreshold(const Histogram& histogram) {
 
     return bestThreshold;
 }
+
+Image otsuSegmentation(const Image& image) {
+    Histogram histogram = calculateHistogram(image);
+    int threshold = calculateOtsuThreshold(histogram);
+    Image result = image;
+
+    for (unsigned char& pixel : result.pixels) {
+        pixel = pixel <= threshold ? 0:255;
+    }
+    return result;
+}

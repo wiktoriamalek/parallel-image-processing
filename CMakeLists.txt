@@ -41,6 +41,14 @@ target_link_libraries(identity_convolution_test PRIVATE OpenCL::OpenCL)
 target_include_directories(thresholding_time_comparison PRIVATE include)
 target_link_libraries(thresholding_time_comparison PRIVATE OpenCL::OpenCL)
 
+
+add_executable(otsu_test
+        src/otsu.cpp
+        tests/otsu_test.cpp
+)
+
+target_include_directories(otsu_test PRIVATE include)
+
 if(UNIX AND NOT APPLE)
     target_link_libraries(img_proc PRIVATE pthread)
     target_link_libraries(check_opencl PRIVATE pthread)

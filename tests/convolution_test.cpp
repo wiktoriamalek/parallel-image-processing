@@ -66,21 +66,22 @@ int main() {
                 {0,  -1,  0},
             }};
 
+        std::string filterName = "sharpen";
         std::array<float, 9> gpuFilter;
         for (int y=0; y<3;y++) {
             for (int x=0; x<3;x++) {
-                gpuFilter[y*3 + x] = edgeDetectionV[y][x];
+                gpuFilter[y*3 + x] = sharpen[y][x];
             }
         }
 
 
-        Image image = loadImage("images/cms.png");
+        Image image = loadImage("images/cms_resolution_change/cms_8192.png");
         Image convoluted = image;
         std::vector<long long> cpu1Times;
 
         for (int repeat=0; repeat<100; repeat++) {
             auto start = std::chrono::high_resolution_clock::now();
-            convolution(image, edgeDetectionV, true, convoluted);
+            convolution(image, sharpen, false, convoluted);
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start);
             cpu1Times.push_back(duration.count());
@@ -97,8 +98,8 @@ int main() {
         int middle = image.height/2;
         for (int repeat=0; repeat<100; repeat++) {
             auto start2 = std::chrono::high_resolution_clock::now();
-            std::thread t1([&]{convolutionRows(image, edgeDetectionV, true, divided, 1, middle);});
-            std::thread t2([&]{convolutionRows(image, edgeDetectionV, true, divided, middle, image.height-1);});
+            std::thread t1([&]{convolutionRows(image, sharpen, false, divided, 1, middle);});
+            std::thread t2([&]{convolutionRows(image, sharpen, false, divided, middle, image.height-1);});
             t1.join();
             t2.join();
             auto end2 = std::chrono::high_resolution_clock::now();
@@ -173,7 +174,7 @@ int main() {
                 checkCL(error, "clCreateKernel");
                 int width = image.width;
                 int height = image.height;
-                int absoluteValue = 1;
+                int absoluteValue = 0;
 
                 checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
                 checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
@@ -226,6 +227,29 @@ int main() {
         std::cout << "Median GPU total (from writing to reading after kernel operations): " << medianGPUAll << " us\n";
         std::cout << "Median GPU kernel only: "<< medianGPUKernel << " us\n";
 
+        std::ofstream file("results/convolution_benchmarks.csv", std::ios::app | std::ios::ate);
+
+        if (!file) {
+            throw std::runtime_error("Could not open CSV");
+        }
+
+        if (file.tellp() == 0) {
+            file << "filter,width,height,cpu_1t_us,cpu_2t_us,gpu_kernel_us,gpu_total_us\n";
+        }
+
+        file << filterName << ","
+             << image.width << ","
+             << image.height << ","
+             << medianCPU1 << ","
+             << medianCPU2 << ","
+             << medianGPUKernel << ","
+             << medianGPUAll << "\n";
+
+        file.close();
+
+        if (!file) {
+            throw std::runtime_error("Could not write into CSV");
+        }
 
         return 0;
     }

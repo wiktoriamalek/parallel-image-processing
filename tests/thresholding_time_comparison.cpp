@@ -23,8 +23,8 @@ double median(std::vector<long long> values) {
 
 int main() {
     try {
-        Image image = loadImage("images/resolution_change/clic_16384.png");
-        int resolution = 16384;
+        Image image = loadImage("images/clic_resolution_change/clic_1024.png");
+        int resolution = 1024;
 
         // test of 1-thread on CPU
         std::vector<long long> cpu1Times;
@@ -80,7 +80,7 @@ int main() {
                 char name[256] = {};
                 error = clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(name), name, nullptr);
                 cl_context context = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &error);
-                cl_command_queue queue = clCreateCommandQueue(context, device, 0, &error);
+                cl_command_queue queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &error);
                 std::size_t bufferSize = image.pixels.size() * sizeof(unsigned char);
                 cl_mem buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, bufferSize, nullptr, &error); // nullptr because now the buffor doesnt have pixels, its just for memory reservation
                 std::ifstream kernelFile("kernels/threshold.cl");
@@ -97,19 +97,22 @@ int main() {
                 std::size_t globalWorkSize = image.pixels.size();
                 Image gpuResult = image;
 
-        for (int repeat=0; repeat<100; repeat++) {
-            auto gpuTotalStart = std::chrono::high_resolution_clock::now();
-            error = clEnqueueWriteBuffer(queue, buffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr);
-            auto kernelStart = std::chrono::high_resolution_clock::now();
-            error = clEnqueueNDRangeKernel(queue, kernel, 1, nullptr, &globalWorkSize, nullptr, 0, nullptr, nullptr);
-            error = clFinish(queue);
-            auto kernelEnd = std::chrono::high_resolution_clock::now();
-            error = clEnqueueReadBuffer(queue, buffer, CL_TRUE, 0, bufferSize, gpuResult.pixels.data(), 0, nullptr, nullptr); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
-            auto gpuTotalEnd = std::chrono::high_resolution_clock::now();
-            auto gpuTotalDuration = std::chrono::duration_cast<std::chrono::microseconds>(gpuTotalEnd - gpuTotalStart);
-            auto kernelDuration = std::chrono::duration_cast<std::chrono::microseconds>(kernelEnd - kernelStart);
-            gpuAll.push_back(gpuTotalDuration.count());
-            gpuKernelOnly.push_back(kernelDuration.count());
+                for (int repeat = 0; repeat < 100; ++repeat) {
+                    cl_event kernelEvent = nullptr;
+
+                    auto gpuTotalStart = std::chrono::steady_clock::now();
+                    auto gpuTotalEnd = std::chrono::steady_clock::now();
+
+                    cl_ulong kernelStart = 0;
+                    cl_ulong kernelEnd = 0;
+
+                    auto totalDuration =
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            gpuTotalEnd - gpuTotalStart
+                        );
+
+                    gpuAll.push_back(totalDuration.count());
+                    gpuKernelOnly.push_back(kernelEnd - kernelStart);
                 }
             clReleaseKernel(kernel);
             clReleaseProgram(program);
@@ -120,9 +123,8 @@ int main() {
 
         }
 
-
         double medianGPUAll = median(gpuAll);
-        double medianGPUKernel = median(gpuKernelOnly);
+        double medianGPUKernel = median(gpuKernelOnly) / 1000.0;
 
         std::cout << "Median GPU total (from writing to reading after kernel operations): " << medianGPUAll << " us\n";
         std::cout << "Median GPU kernel only: "<< medianGPUKernel << " us\n";

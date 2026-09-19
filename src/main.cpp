@@ -29,7 +29,6 @@ int main() {
 
         std::cout << "Single pixels: " <<single.pixels.size() << std::endl;
         std::cout << "Divided: " << divided.pixels.size() << std::endl;
-
         std::cout << "Width:" << image.width << " " << " Height:" <<image.height;
         if (!image.pixels.empty()) {
             std::cout << " First pixel:" << static_cast<int>(image.pixels.front()) << " ";

@@ -74,7 +74,6 @@ int main() {
             }
         }
 
-
         Image image = loadImage("images/cms_resolution_change/cms_8192.png");
         Image convoluted = image;
         std::vector<long long> cpu1Times;

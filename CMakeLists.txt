@@ -49,7 +49,7 @@ add_executable(otsu_test
 )
 
 target_include_directories(otsu_test PRIVATE include)
-
+target_link_libraries(otsu_test PRIVATE OpenCL::OpenCL)
 if(UNIX AND NOT APPLE)
     target_link_libraries(img_proc PRIVATE pthread)
     target_link_libraries(check_opencl PRIVATE pthread)

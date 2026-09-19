@@ -10,3 +10,6 @@ Histogram calculateHistogramGPU(const Image& image);
 int calculateOtsuThreshold(const Histogram& histogram);
 Image otsuSegmentation(const Image& image);
 Image otsuSegmentation2Threads(const Image& image);
+Image otsuSegmentationGPU(const Image& image);
+Image applyThresholdGPU(const Image& image, int threshold);
+

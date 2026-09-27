@@ -6,7 +6,7 @@ int main() {
     Image image = loadImage("images/mitsubishi.png");
     Image distorted = distortRadial(image, 0.75f, 0.75f);
     saveImage("images/mitsubishi_distorted/mitusbishi_distorted_075_075.png", distorted);
-    Image corrected = correctRadialDistortion(distorted, 0.75f,0.75f);
+    Image corrected = correctRadialDistortionCPU2(distorted, 0.75f,0.75f);
     // if (corrected.pixels == image.pixels) {
     //     std::cout<<"Corrected and image are the same"<<std::endl;
     // }

@@ -66,7 +66,7 @@ Image distortRadial(const Image& image, float k1, float k2) {
     return output;
 }
 
-Image correctRadialDistortion(const Image& image, float k1, float k2) {
+Image correctRadialDistortionCPU2(const Image& image, float k1, float k2) {
     Image output = image;
     int middleY = image.height/2;
 
@@ -75,6 +75,12 @@ Image correctRadialDistortion(const Image& image, float k1, float k2) {
 
     thread1.join();
     thread2.join();
+    return output;
+}
+
+Image correctRadialDistortionCPU1(const Image& image, float k1, float k2) {
+    Image output = image;
+    correctRadialDistortionRange(image, output, k1, k2, 0, image.height);
     return output;
 }
 
@@ -120,52 +126,4 @@ void correctRadialDistortionRange(const Image &image, Image &output, float k1, f
             }
         }
     }
-}
-
-
-Image correctRadialDistortion(const Image& image, float k1, float k2) {
-    Image output = image;
-    float centerX = (image.width - 1)/2.0f;
-    float centerY = (image.height - 1)/2.0f;
-
-    // int pixelX = 700;
-    // int pixelY = 400;
-    float scale = std::max(image.width, image.height) / 2.0f;
-
-    for (int pixelX = 0; pixelX < image.width; pixelX++) {
-        for (int pixelY = 0; pixelY < image.height; pixelY++) {
-            float relativeX = pixelX - centerX;
-            float relativeY = pixelY - centerY;
-
-            float normalizedX = relativeX / scale;
-            float normalizedY = relativeY / scale;
-
-            float r2 = normalizedX*normalizedX + normalizedY*normalizedY; // squared distance from the center
-
-            float factor = 1.0f + k1 * r2 + k2 * r2 * r2;
-
-            float distortedX = normalizedX * factor; // radial distortion
-            float distortedY = normalizedY * factor; // radial distortion
-
-            float distortedRelativeX = distortedX * scale ;
-            float distortedRelativeY = distortedY * scale ;
-
-            float distortedPixelX = distortedRelativeX + centerX;
-            float distortedPixelY = distortedRelativeY + centerY;
-
-            int sourceX = std::lround(distortedPixelX);
-            int sourceY = std::lround(distortedPixelY);
-
-            int destinationIndex = pixelY * image.width + pixelX;
-            if (sourceX < 0 || image.width <= sourceX || sourceY < 0 || image.height <= sourceY) {
-                output.pixels[destinationIndex] = 0;
-            }
-
-            else {
-                int sourceIndex = sourceY * image.width + sourceX;
-                output.pixels[destinationIndex] = image.pixels[sourceIndex];
-            }
-        }
-    }
-    return output;
 }

@@ -48,6 +48,15 @@ add_executable(otsu_test
         tests/test_image_io.cpp
 )
 
+add_executable(distortion_test
+        src/distortion.cpp
+        tests/distortion_test.cpp
+        tests/test_image_io.cpp
+)
+
+target_include_directories(distortion_test PRIVATE include)
+
+
 target_include_directories(otsu_test PRIVATE include)
 target_link_libraries(otsu_test PRIVATE OpenCL::OpenCL)
 if(UNIX AND NOT APPLE)

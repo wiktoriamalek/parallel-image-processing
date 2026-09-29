@@ -55,6 +55,7 @@ add_executable(distortion_test
 )
 
 target_include_directories(distortion_test PRIVATE include)
+target_link_libraries(distortion_test PRIVATE OpenCL::OpenCL)
 
 
 target_include_directories(otsu_test PRIVATE include)

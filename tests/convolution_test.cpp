@@ -13,12 +13,6 @@
 #include <string>
 #include <algorithm>
 
-void checkCL(cl_int error, const char* operation) {
-    if (error != CL_SUCCESS) {
-        throw std::runtime_error(std::string(operation) + " failed: " + std::to_string(error));
-    }
-}
-
 double median(std::vector<long long> values) {
     std::sort(values.begin(), values.end());
     std::size_t n = values.size();
@@ -26,6 +20,12 @@ double median(std::vector<long long> values) {
         return values[n/2];
     }
     return (values[n/2 - 1] + values[n/2])/2.0;
+}
+
+void checkCL(cl_int error, const char* operation) {
+    if (error != CL_SUCCESS) {
+        throw std::runtime_error(std::string(operation) + " failed: " + std::to_string(error));
+    }
 }
 
 int main() {

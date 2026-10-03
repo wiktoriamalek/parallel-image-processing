@@ -30,3 +30,6 @@ cmake-build-*/
 *.fls
 *.fdb_latexmk
 *.synctex.gz
+
+# Python
+__pycache__/

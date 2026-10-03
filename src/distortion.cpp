@@ -1,36 +1,8 @@
-#include <iostream>
-#include "stb_image.h"
-#include "stb_image_write.h"
-#include "image_io.hpp"
+#include "distortion.hpp"
+#include "parallel_utils.hpp"
 #include <stdexcept>
-#include <thread>
-#include <chrono>
-#define CL_SILENCE_DEPRECATION
-#include <OpenCL/opencl.h>
-#include <vector>
-#include <fstream>
-#include <sstream>
-#include <string>
 #include <algorithm>
 #include <cmath>
-#include <functional>
-#include "distortion.hpp"
-
-double median(std::vector<long long> values) {
-    std::sort(values.begin(), values.end());
-    std::size_t n = values.size();
-    if (n%2 == 1) {
-        return values[n/2];
-    }
-    return (values[n/2 - 1] + values[n/2])/2.0;
-}
-
-
-void checkCL(cl_int error, const char* operation) {
-    if (error != CL_SUCCESS) {
-        throw std::runtime_error(std::string(operation) + " failed: " + std::to_string(error));
-    }
-}
 
 Image distortRadial(const Image& image, float k1, float k2) {
     Image output = image;
@@ -93,42 +65,15 @@ Image distortRadial(const Image& image, float k1, float k2) {
     return output;
 }
 
-Image correctRadialDistortionCPU2(const Image& image, float k1, float k2) {
-
-    Image output = image;
-    int middleY = image.height/2;
-    std::vector<long long> cpu2Times;
-
-    for (int repeat=0; repeat<100; repeat++) {
-        auto start = std::chrono::steady_clock::now();
-        std::thread thread1(correctRadialDistortionRange, std::cref(image), std::ref(output), k1, k2, 0, middleY);
-        std::thread thread2(correctRadialDistortionRange, std::cref(image), std::ref(output), k1, k2, middleY, image.height);
-
-        thread1.join();
-        thread2.join();
-        auto end = std::chrono::steady_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start);
-        cpu2Times.push_back(duration.count());
-    }
-    double medianCPU2 = median(cpu2Times);
-    std::cout <<"Median time taken on 2-threads on CPU: " << medianCPU2 <<" us" << std::endl;
-
-    return output;
+void correctRadialDistortionCPU(const Image& image, float k1, float k2, Image& output, int threads) {
+    parallelRanges(image.height, threads, [&](std::size_t begin, std::size_t end, int) {
+        correctRadialDistortionRange(image, output, k1, k2, begin, end);
+    });
 }
 
-Image correctRadialDistortionCPU1(const Image& image, float k1, float k2) {
-    std::vector<long long> cpu1Times;
+Image correctRadialDistortionCPU(const Image& image, float k1, float k2, int threads) {
     Image output = image;
-    for (int repeat=0; repeat<100; repeat++) {
-        auto start = std::chrono::steady_clock::now();
-        correctRadialDistortionRange(image, output, k1, k2, 0, image.height);
-        auto end = std::chrono::steady_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start);
-        cpu1Times.push_back(duration.count());
-    }
-    double medianCPU1 = median(cpu1Times);
-    std::cout <<"Median time taken on single-thread CPU: " << medianCPU1 <<" us" << std::endl;
-
+    correctRadialDistortionCPU(image, k1, k2, output, threads);
     return output;
 }
 
@@ -146,7 +91,6 @@ void correctRadialDistortionRange(const Image &image, Image &output, float k1, f
             float normalizedY = relativeY / scale;
 
             float r2 = normalizedX*normalizedX + normalizedY*normalizedY; // squared distance from the center
-
             float factor = 1.0f + k1 * r2 + k2 * r2 * r2;
 
             float distortedX = normalizedX * factor; // radial distortion
@@ -175,93 +119,56 @@ void correctRadialDistortionRange(const Image &image, Image &output, float k1, f
     }
 }
 
-Image correctRadialDistortionGPU(const Image& image, float k1, float k2) {
-        Image gpuResult = image;
-
-        // GPU
-        std::vector<long long> gpuKernelOnly;
-        std::vector<long long> gpuAll;
-
-        // Setup
-        cl_uint platformCount = 0;
+RadialDistortionGPU::RadialDistortionGPU(const Image& image, float k1, float k2)
+    : cl("kernels/distortion_correction.cl"),
+      bufferSize(image.pixels.size() * sizeof(unsigned char)),
+      globalWorkSize{static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)} {
+    try {
         cl_int error;
-        checkCL(clGetPlatformIDs(0, nullptr, &platformCount), "clGetPlatformIDs");
-        std::vector<cl_platform_id> platforms(platformCount);
-        checkCL(clGetPlatformIDs(platformCount, platforms.data(), nullptr), "clGetPlatformIDs");
+        inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        kernel = clCreateKernel(cl.program, "distortion_correction", &error);
+        checkCL(error, "clCreateKernel");
 
-        for (auto platform : platforms) {
-            cl_uint count = 0;
-            checkCL(clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &count), "clGetDeviceIDs");
-            std::vector<cl_device_id> devices(count);
-            checkCL(clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, count, devices.data(), nullptr), "clGetDeviceIDs");
-            for (auto device : devices) {
-                char name[256] = {};
-                checkCL(clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(name), name, nullptr), "clGetDeviceInfo");
-                cl_context context = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &error);
-                checkCL(error, "clCreateContext");
-                cl_command_queue queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &error);
-                checkCL(error, "clCreateCommandQueue");
-                std::size_t bufferSize = image.pixels.size() * sizeof(unsigned char);
-
-                cl_mem inputBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
-                checkCL(error, "clCreateBuffer");
-                cl_mem outputBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, bufferSize, nullptr, &error);
-                checkCL(error, "clCreateBuffer");
-
-                std::ifstream kernelFile("kernels/distortion_correction.cl");
-                if (!kernelFile) throw std::runtime_error("Could not open kernels/distortion_correction.cl");
-                std::stringstream kernelStream;
-                kernelStream << kernelFile.rdbuf();
-                std::string kernelSource = kernelStream.str();
-
-                const char* source = kernelSource.c_str();
-                cl_program program = clCreateProgramWithSource(context, 1, &source, nullptr, &error);
-                checkCL(error, "clCreateProgramWithSource");
-                checkCL(clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr), "clBuildProgram"); // OpenCL compile this program to the device - mac
-                cl_kernel kernel = clCreateKernel(program, "distortion_correction", &error);
-                checkCL(error, "clCreateKernel");
-                int width = image.width;
-                int height = image.height;
-
-                checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 2, sizeof(int), &height), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 3, sizeof(int), &width), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 4, sizeof(float), &k1), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 5, sizeof(float), &k2), "clSetKernelArg");
-
-                std::size_t globalWorkSize[2] = {static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)};
-
-            for (int repeat=0; repeat<100; repeat++) {
-                cl_event kernelEvent;
-                auto gpuTotalStart = std::chrono::steady_clock::now();
-                checkCL(clEnqueueWriteBuffer(queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-                checkCL(clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, &kernelEvent), "clEnqueueNDRangeKernel");
-                checkCL(clFinish(queue), "clFinish");
-                checkCL(clEnqueueReadBuffer(queue, outputBuffer, CL_TRUE, 0, bufferSize, gpuResult.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
-                auto gpuTotalEnd = std::chrono::steady_clock::now();
-                auto gpuTotalDuration = std::chrono::duration_cast<std::chrono::microseconds>(gpuTotalEnd - gpuTotalStart);
-                cl_ulong kernelStart, kernelEnd;
-                checkCL(clGetEventProfilingInfo(kernelEvent, CL_PROFILING_COMMAND_START, sizeof(kernelStart), &kernelStart, nullptr), "clGetEventProfilingInfo");
-                checkCL(clGetEventProfilingInfo(kernelEvent, CL_PROFILING_COMMAND_END, sizeof(kernelEnd), &kernelEnd, nullptr), "clGetEventProfilingInfo");
-                checkCL(clReleaseEvent(kernelEvent), "clReleaseEvent");
-                gpuAll.push_back(gpuTotalDuration.count());
-                gpuKernelOnly.push_back(kernelEnd - kernelStart);
-            }
-            checkCL(clReleaseKernel(kernel), "clReleaseKernel");
-            checkCL(clReleaseProgram(program), "clReleaseProgram");
-            checkCL(clReleaseMemObject(inputBuffer), "clReleaseMemObject");
-                checkCL(clReleaseMemObject(outputBuffer), "clReleaseMemObject");
-            checkCL(clReleaseCommandQueue(queue), "clReleaseCommandQueue");
-            checkCL(clReleaseContext(context), "clReleaseContext");
-        }
+        checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 2, sizeof(int), &image.height), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 3, sizeof(int), &image.width), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 4, sizeof(float), &k1), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 5, sizeof(float), &k2), "clSetKernelArg");
+    } catch (...) {
+        release();
+        throw;
     }
+}
 
-        double medianGPUAll = median(gpuAll);
-        double medianGPUKernel = median(gpuKernelOnly) / 1000.0;
+void RadialDistortionGPU::release() {
+    if (kernel) clReleaseKernel(kernel);
+    if (inputBuffer) clReleaseMemObject(inputBuffer);
+    if (outputBuffer) clReleaseMemObject(outputBuffer);
+}
 
-        std::cout << "Median GPU total (from writing to reading after kernel operations): " << medianGPUAll << " us\n";
-        std::cout << "Median GPU kernel only: "<< medianGPUKernel << " us\n";
+RadialDistortionGPU::~RadialDistortionGPU() {
+    release();
+}
 
-    return gpuResult;
+void RadialDistortionGPU::run(const Image& image, Image& output, cl_event* kernelEvent) {
+    if (image.width != globalWorkSize[0] || image.height != globalWorkSize[1] ||
+        output.width != image.width || output.height != image.height ||
+        image.pixels.size() != bufferSize || output.pixels.size() != bufferSize) {
+        throw std::runtime_error("Image dimensions do not match the GPU buffers");
+    }
+    checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
+    checkCL(clFinish(cl.queue), "clFinish");
+    checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+}
+
+Image correctRadialDistortionGPU(const Image& image, float k1, float k2) {
+    Image output = image;
+    RadialDistortionGPU gpu(image, k1, k2);
+    gpu.run(image, output);
+    return output;
 }

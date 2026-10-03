@@ -3,8 +3,9 @@
 #include "image_io.hpp"
 #include <cstddef>
 #include <stdexcept>
+#include "parallel_utils.hpp"
 
-Image thresholding(const Image& image)
+Image thresholding(const Image& image, int threshold)
 {
     if (image.width <= 0 || image.height <= 0) {
         throw std::runtime_error("Image is empty");
@@ -15,17 +16,8 @@ Image thresholding(const Image& image)
         throw std::runtime_error("Image size mismatch");
     }
 
-    int threshold = 128;
-    Image result = image; // we are modifying the copy
-
-    for (std::size_t i = 0; i < result.pixels.size(); ++i) {
-        if (result.pixels[i] < threshold) {
-            result.pixels[i] = 0;
-        }
-        else {
-            result.pixels[i] = 255;
-        }
-    }
+    Image result = image;
+    ThresholdRange(result, threshold, 0, result.pixels.size());
     return result;
 }
 
@@ -41,3 +33,8 @@ void ThresholdRange(Image& image, int threshold, std::size_t min, std::size_t ma
     }
 }
 
+void ThresholdParallel(Image& image, int threshold, int numThreads) {
+    parallelRanges(image.pixels.size(), numThreads, [&](std::size_t begin, std::size_t end, int) {
+        ThresholdRange(image, threshold, begin, end);
+    });
+}

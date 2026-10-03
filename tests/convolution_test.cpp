@@ -1,260 +1,87 @@
-#include <iostream>
-#include "stb_image.h"
-#include "stb_image_write.h"
 #include "image_io.hpp"
-#include <stdexcept>
-#include <thread>
-#include <chrono>
-#define CL_SILENCE_DEPRECATION
-#include <OpenCL/opencl.h>
-#include <vector>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <algorithm>
+#include "common_benchmarking.hpp"
+#include "opencl_utils.hpp"
+#include <iomanip>
+#include <iostream>
+#include <map>
 
-double median(std::vector<long long> values) {
-    std::sort(values.begin(), values.end());
-    std::size_t n = values.size();
-    if (n%2 == 1) {
-        return values[n/2];
-    }
-    return (values[n/2 - 1] + values[n/2])/2.0;
-}
-
-void checkCL(cl_int error, const char* operation) {
-    if (error != CL_SUCCESS) {
-        throw std::runtime_error(std::string(operation) + " failed: " + std::to_string(error));
-    }
-}
-
-int main() {
+int main(int argc, char* argv[]) {
     try {
-        std::array<std::array<float, 3>, 3> identity = {
-            {
-                {0, 0, 0},
-                {0, 1, 0},
-                {0, 0, 0},
-            }};
-
-        std::array<std::array<float, 3>, 3> boxBlur = {
-            {
-                // box blur 3x3 - it takes for each pixel, 9 values from the surrounding pixels and calculates mean
-                {1.0f/9, 1.0f/9, 1.0f/9},
-                {1.0f/9, 1.0f/9, 1.0f/9},
-                {1.0f/9, 1.0f/9, 1.0f/9},
-            }};
-
-        std::array<std::array<float, 3>, 3> edgeDetectionH = {
-            {
-                {-1, -1, -1},
-                {0,   0,  0},
-                {1,   1,  1},
-            }};
-
-        std::array<std::array<float, 3>, 3> edgeDetectionV = {
-            {
-                {-1,  0,  1},
-                {-1,  0,  1},
-                {-1,  0,  1},
-            }};
-
-        std::array<std::array<float, 3>, 3> sharpen = {
-            {
-                {0,  -1,  0},
-                {-1,  5, -1},
-                {0,  -1,  0},
-            }};
-
-        std::string filterName = "sharpen";
+        BenchmarkOptions options(argc, argv, "images/cms_resolution_change/cms_8192.png",
+                                 "results/convolution_scaling.csv", {"--filter"});
+        const std::map<std::string, std::array<std::array<float, 3>, 3>> filters = {
+            {"identity", {{{0, 0, 0}, {0, 1, 0}, {0, 0, 0}}}},
+            {"box_blur", {{{1.0f/9, 1.0f/9, 1.0f/9}, {1.0f/9, 1.0f/9, 1.0f/9}, {1.0f/9, 1.0f/9, 1.0f/9}}}},
+            {"sharpen", {{{0, -1, 0}, {-1, 5, -1}, {0, -1, 0}}}},
+            {"edge_detection_h", {{{-1, -1, -1}, {0, 0, 0}, {1, 1, 1}}}},
+            {"edge_detection_v", {{{-1, 0, 1}, {-1, 0, 1}, {-1, 0, 1}}}}
+        };
+        std::string filterName = options.parameter("--filter", "sharpen");
+        auto selected = filters.find(filterName);
+        if (selected == filters.end()) throw std::invalid_argument("Unknown filter: " + filterName);
+        const auto& filter = selected->second;
+        int absoluteValue = filterName == "edge_detection_h" || filterName == "edge_detection_v";
         std::array<float, 9> gpuFilter;
-        for (int y=0; y<3;y++) {
-            for (int x=0; x<3;x++) {
-                gpuFilter[y*3 + x] = sharpen[y][x];
-            }
+        for (int y = 0; y < 3; ++y) {
+            for (int x = 0; x < 3; ++x) gpuFilter[y * 3 + x] = filter[y][x];
         }
 
-        Image image = loadImage("images/cms_resolution_change/cms_8192.png");
-        Image convoluted = image;
-        std::vector<long long> cpu1Times;
+        Image image = loadImage(options.image);
+        Image cpuResult = image;
+        Image result = image;
+        double cpu1 = measure([&] { convolution(image, filter, absoluteValue, cpuResult); }, options.repeats);
+        double cpuN = measure([&] { convolution(image, filter, absoluteValue, result, options.threads); },
+                              options.repeats, [] {}, [&](int) {
+            if (result.pixels != cpuResult.pixels) throw std::runtime_error("CPU convolution results differ");
+        });
 
-        for (int repeat=0; repeat<100; repeat++) {
-            auto start = std::chrono::high_resolution_clock::now();
-            convolution(image, sharpen, false, convoluted);
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start);
-            cpu1Times.push_back(duration.count());
-            // if (convoluted.pixels != image.pixels) {
-            //     throw std::runtime_error("CPU identity convolution differs from input");
-            // }
-        }
-        double medianCPU1 = median(cpu1Times);
-        std::cout <<"Median time taken on single-thread CPU: " << medianCPU1 <<"us" << std::endl;
-
-        // 2 - thread CPU
-        std::vector<long long> cpu2Times;
-        Image divided = image;
-        int middle = image.height/2;
-        for (int repeat=0; repeat<100; repeat++) {
-            auto start2 = std::chrono::high_resolution_clock::now();
-            std::thread t1([&]{convolutionRows(image, sharpen, false, divided, 1, middle);});
-            std::thread t2([&]{convolutionRows(image, sharpen, false, divided, middle, image.height-1);});
-            t1.join();
-            t2.join();
-            auto end2 = std::chrono::high_resolution_clock::now();
-            auto duration2 = std::chrono::duration_cast<std::chrono::microseconds>(end2-start2);
-            cpu2Times.push_back(duration2.count());
-            if (divided.pixels != convoluted.pixels) {
-                throw std::runtime_error("CPU results differ");
-            }
-        }
-
-        double medianCPU2 = median(cpu2Times);
-        std::cout <<"Median time taken on 2-threads on CPU: " << medianCPU2 <<"us" << std::endl;
-
-        //saveImage("results/cms_identity.png", identical);
-
-        Image blurred = convolution(image, boxBlur, false);
-        //saveImage("results/cms_blurred.png", blurred);
-
-        Image sharpened = convolution(image, sharpen, false);
-        //saveImage("results/cms_sharpened.png", sharpened);
-
-        Image edgeDetectedH = convolution(image, edgeDetectionH, true);
-        //saveImage("results/cms_edgeDetectionH.png", edgeDetectedH);
-
-        Image edgeDetectedV = convolution(image, edgeDetectionV, true);
-        //saveImage("results/cms_edgeDetectionV.png", edgeDetectedV);
-
-        // GPU
-        std::vector<long long> gpuKernelOnly;
-        std::vector<long long> gpuAll;
-
-        // Setup
-        cl_uint platformCount = 0;
+        OpenCL cl("kernels/convolution.cl");
         cl_int error;
-        checkCL(clGetPlatformIDs(0, nullptr, &platformCount), "clGetPlatformIDs");
-        std::vector<cl_platform_id> platforms(platformCount);
-        checkCL(clGetPlatformIDs(platformCount, platforms.data(), nullptr), "clGetPlatformIDs");
+        std::size_t size = image.pixels.size();
+        cl_mem inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, size, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        cl_mem outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, size, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        cl_mem filterBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(gpuFilter), gpuFilter.data(), &error);
+        checkCL(error, "clCreateBuffer");
+        cl_kernel kernel = clCreateKernel(cl.program, "convolution3x3", &error);
+        checkCL(error, "clCreateKernel");
+        checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 1, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 2, sizeof(image.width), &image.width), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 3, sizeof(image.height), &image.height), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 4, sizeof(filterBuffer), &filterBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 5, sizeof(absoluteValue), &absoluteValue), "clSetKernelArg");
+        std::size_t workSize[2] = {static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)};
+        cl_event event = nullptr;
+        std::vector<double> kernelTimes;
+        double gpuTotal = measure([&] {
+            checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, size, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
+            checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, workSize, nullptr, 0, nullptr, &event), "clEnqueueNDRangeKernel");
+            checkCL(clFinish(cl.queue), "clFinish");
+            checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, size, result.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+        }, options.repeats, [] {}, [&](int repeat) {
+            double time = kernelTimeUs(event);
+            checkCL(clReleaseEvent(event), "clReleaseEvent");
+            if (repeat >= 0) kernelTimes.push_back(time);
+            if (result.pixels != cpuResult.pixels) throw std::runtime_error("GPU and CPU convolution results differ");
+        });
+        clReleaseKernel(kernel);
+        clReleaseMemObject(inputBuffer);
+        clReleaseMemObject(outputBuffer);
+        clReleaseMemObject(filterBuffer);
+        double gpuKernel = median(kernelTimes);
 
-        for (auto platform : platforms) {
-            cl_uint count = 0;
-            checkCL(clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &count), "clGetDeviceIDs");
-            std::vector<cl_device_id> devices(count);
-            checkCL(clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, count, devices.data(), nullptr), "clGetDeviceIDs");
-            for (auto device : devices) {
-                char name[256] = {};
-                checkCL(clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(name), name, nullptr), "clGetDeviceInfo");
-                cl_context context = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &error);
-                checkCL(error, "clCreateContext");
-                cl_command_queue queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &error);
-                checkCL(error, "clCreateCommandQueue");
-                std::size_t bufferSize = image.pixels.size() * sizeof(unsigned char);
-
-                cl_mem inputBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
-                checkCL(error, "clCreateBuffer");
-                cl_mem outputBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, bufferSize, nullptr, &error);
-                checkCL(error, "clCreateBuffer");
-                                                                                // create a memory on GPU and copy 9 elements there
-                cl_mem filterBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, gpuFilter.size() * sizeof(float), gpuFilter.data(), &error);
-                checkCL(error, "clCreateBuffer");
-
-                std::ifstream kernelFile("kernels/convolution.cl");
-                if (!kernelFile) throw std::runtime_error("Could not open kernels/convolution.cl");
-                std::stringstream kernelStream;
-                kernelStream << kernelFile.rdbuf();
-                std::string kernelSource = kernelStream.str();
-
-                const char* source = kernelSource.c_str();
-                cl_program program = clCreateProgramWithSource(context, 1, &source, nullptr, &error);
-                checkCL(error, "clCreateProgramWithSource");
-                checkCL(clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr), "clBuildProgram"); // OpenCL compile this program to the device - mac
-                cl_kernel kernel = clCreateKernel(program, "convolution3x3", &error);
-                checkCL(error, "clCreateKernel");
-                int width = image.width;
-                int height = image.height;
-                int absoluteValue = 0;
-
-                checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 2, sizeof(int), &width), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 3, sizeof(int), &height), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 4, sizeof(cl_mem), &filterBuffer), "clSetKernelArg");
-                checkCL(clSetKernelArg(kernel, 5, sizeof(int), &absoluteValue), "clSetKernelArg");
-
-                std::size_t globalWorkSize[2] = {
-                    static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)
-                };
-                Image gpuResult = image;
-
-
-            for (int repeat=0; repeat<100; repeat++) {
-                cl_event kernelEvent;
-                auto gpuTotalStart = std::chrono::high_resolution_clock::now();
-                checkCL(clEnqueueWriteBuffer(queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-                checkCL(clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, &kernelEvent), "clEnqueueNDRangeKernel");
-                checkCL(clFinish(queue), "clFinish");
-                checkCL(clEnqueueReadBuffer(queue, outputBuffer, CL_TRUE, 0, bufferSize, gpuResult.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
-                auto gpuTotalEnd = std::chrono::high_resolution_clock::now();
-                auto gpuTotalDuration = std::chrono::duration_cast<std::chrono::microseconds>(gpuTotalEnd - gpuTotalStart);
-                cl_ulong kernelStart, kernelEnd;
-                checkCL(clGetEventProfilingInfo(kernelEvent, CL_PROFILING_COMMAND_START, sizeof(kernelStart), &kernelStart, nullptr), "clGetEventProfilingInfo");
-                checkCL(clGetEventProfilingInfo(kernelEvent, CL_PROFILING_COMMAND_END, sizeof(kernelEnd), &kernelEnd, nullptr), "clGetEventProfilingInfo");
-                checkCL(clReleaseEvent(kernelEvent), "clReleaseEvent");
-                gpuAll.push_back(gpuTotalDuration.count());
-                gpuKernelOnly.push_back(kernelEnd - kernelStart);
-                if (gpuResult.pixels != convoluted.pixels) {
-                    throw std::runtime_error("GPU and CPU convolution results differ");
-                }
-
-            }
-                std::cout << "GPU and CPU convolution are identical!\n";
-            checkCL(clReleaseKernel(kernel), "clReleaseKernel");
-            checkCL(clReleaseProgram(program), "clReleaseProgram");
-            checkCL(clReleaseMemObject(inputBuffer), "clReleaseMemObject");
-                checkCL(clReleaseMemObject(outputBuffer), "clReleaseMemObject");
-                checkCL(clReleaseMemObject(filterBuffer), "clReleaseMemObject");
-            checkCL(clReleaseCommandQueue(queue), "clReleaseCommandQueue");
-            checkCL(clReleaseContext(context), "clReleaseContext");
-        }
-
-    }
-
-        double medianGPUAll = median(gpuAll);
-        double medianGPUKernel = median(gpuKernelOnly) / 1000.0;
-
-        std::cout << "Median GPU total (from writing to reading after kernel operations): " << medianGPUAll << " us\n";
-        std::cout << "Median GPU kernel only: "<< medianGPUKernel << " us\n";
-
-        std::ofstream file("results/convolution_benchmarks.csv", std::ios::app | std::ios::ate);
-
-        if (!file) {
-            throw std::runtime_error("Could not open CSV");
-        }
-
-        if (file.tellp() == 0) {
-            file << "filter,width,height,cpu_1t_us,cpu_2t_us,gpu_kernel_us,gpu_total_us\n";
-        }
-
-        file << filterName << ","
-             << image.width << ","
-             << image.height << ","
-             << medianCPU1 << ","
-             << medianCPU2 << ","
-             << medianGPUKernel << ","
-             << medianGPUAll << "\n";
-
-        file.close();
-
-        if (!file) {
-            throw std::runtime_error("Could not write into CSV");
-        }
-
+        std::ostringstream row;
+        row << std::setprecision(12) << std::quoted(options.image, '"', '"') << ',' << filterName << ','
+            << image.width << ',' << image.height << ',' << options.threads << ',' << options.repeats << ','
+            << cpu1 << ',' << cpuN << ',' << gpuKernel << ',' << gpuTotal;
+        appendCsv(options.output, "image,filter,width,height,threads,repeats,cpu_1t_us,cpu_nt_us,gpu_kernel_us,gpu_total_us", row.str());
+        std::cout << "Median CPU1 / CPU" << options.threads << " / GPU total / GPU kernel [us]: "
+                  << cpu1 << " / " << cpuN << " / " << gpuTotal << " / " << gpuKernel << '\n';
         return 0;
-    }
-
-    catch (const std::exception& e) {
-        std::cerr << e.what() << std::endl;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
         return 1;
     }
 }

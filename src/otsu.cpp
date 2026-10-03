@@ -1,54 +1,31 @@
 #include "otsu.hpp"
-#include <thread>
-#include <vector>
+#include "parallel_utils.hpp"
 #include <algorithm>
-#include <functional> // so we can use std::ref
-#include "stb_image.h"
-#include "stb_image_write.h"
-#include "image_io.hpp"
 #include <stdexcept>
-#define CL_SILENCE_DEPRECATION
-#include <OpenCL/opencl.h>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <array>
+#include <vector>
 
 void calculateHistogramRange(const Image& image, Histogram& histogram, std::size_t begin, std::size_t end) {
     for (std::size_t i=begin; i<end; i++) {
         int pixel = image.pixels[i];
-        ++histogram[pixel];
-    }
-}
-
-Histogram calculateHistogram(const Image& image) {
-    Histogram histogram{}; // resets all 256 counters to zero.
-
-    for (unsigned char pixel : image.pixels) {
         ++histogram[pixel]; // if pixel is e.g 50, we increase histogram[50]
     }
-    return histogram;
 }
 
-Histogram calculateHistogram2Threads(const Image& image) {
-    Histogram histogram1{};
-    Histogram histogram2{};
-    std::size_t Npixels = image.pixels.size();
-    std::size_t middle = Npixels / 2;
-
-    std::thread t1(calculateHistogramRange, std::ref(image), std::ref(histogram1), 0, middle);
-    std::thread t2(calculateHistogramRange, std::ref(image), std::ref(histogram2), middle, Npixels);
-    t1.join();
-    t2.join();
+Histogram calculateHistogram(const Image& image, int threads) {
+    if (threads <= 0) throw std::invalid_argument("Thread count must be positive");
+    // every thread counts its part into its own histogram, so no two threads increase the same counter
+    std::vector<Histogram> partial(threads); // all counters start at zero
+    parallelRanges(image.pixels.size(), threads, [&](std::size_t begin, std::size_t end, int thread) {
+        calculateHistogramRange(image, partial[thread], begin, end);
+    });
 
     Histogram histogram{};
-
-    for (int i=0; i<256; i++) {
-        histogram[i] = histogram1[i] + histogram2[i];
+    for (const Histogram& part : partial) {
+        for (int i=0; i<256; i++) {
+            histogram[i] += part[i];
+        }
     }
-
     return histogram;
-
 }
 
 int calculateOtsuThreshold(const Histogram& histogram) {
@@ -91,18 +68,6 @@ int calculateOtsuThreshold(const Histogram& histogram) {
 
     return bestThreshold;
 }
-
-Image otsuSegmentation(const Image& image) {
-    Image result = image;
-    Histogram histogram = calculateHistogram(image);
-    int threshold = calculateOtsuThreshold(histogram);
-
-    for (unsigned char& pixel : result.pixels) {
-        pixel = pixel <= threshold ? 0 : 255;
-    }
-
-    return result;
-}
                         // not const, because we will be modifying it
 void applyThresholdRange(Image& image, int threshold, std::size_t begin, std::size_t end) {
     for (std::size_t i=begin; i<end; i++) {
@@ -117,155 +82,78 @@ void applyThresholdRange(Image& image, int threshold, std::size_t begin, std::si
     }
 }
 
-Image otsuSegmentation2Threads(const Image& image) {
+Image otsuSegmentation(const Image& image, int threads) {
     Image result = image;
-    Histogram histogram = calculateHistogram2Threads(image);
+    int threshold = calculateOtsuThreshold(calculateHistogram(image, threads));
+    parallelRanges(result.pixels.size(), threads, [&](std::size_t begin, std::size_t end, int) {
+        applyThresholdRange(result, threshold, begin, end);
+    });
+    return result;
+}
+
+OtsuGPU::OtsuGPU(const Image& image)
+    : cl("kernels/otsu.cl"), pixelCount(image.pixels.size()) {
+    try {
+        cl_int error;
+        inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, pixelCount, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        histogramBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, 256 * sizeof(cl_uint), nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, pixelCount, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        histogramKernel = clCreateKernel(cl.program, "histogramKernel", &error);
+        checkCL(error, "clCreateKernel");
+        thresholdKernel = clCreateKernel(cl.program, "thresholdKernel", &error);
+        checkCL(error, "clCreateKernel");
+
+        int Npixels = static_cast<int>(pixelCount);
+        checkCL(clSetKernelArg(histogramKernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(histogramKernel, 1, sizeof(cl_mem), &histogramBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(histogramKernel, 2, sizeof(int), &Npixels), "clSetKernelArg");
+        checkCL(clSetKernelArg(thresholdKernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(thresholdKernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(thresholdKernel, 2, sizeof(int), &Npixels), "clSetKernelArg");
+    } catch (...) {
+        release();
+        throw;
+    }
+}
+
+void OtsuGPU::release() {
+    if (histogramKernel) clReleaseKernel(histogramKernel);
+    if (thresholdKernel) clReleaseKernel(thresholdKernel);
+    if (inputBuffer) clReleaseMemObject(inputBuffer);
+    if (histogramBuffer) clReleaseMemObject(histogramBuffer);
+    if (outputBuffer) clReleaseMemObject(outputBuffer);
+}
+
+OtsuGPU::~OtsuGPU() {
+    release();
+}
+
+// histogram on GPU -> Otsu threshold on CPU -> thresholding on GPU, the image is sent to the GPU only once
+Histogram OtsuGPU::run(const Image& image, Image& output, cl_event* histogramEvent, cl_event* thresholdEvent) {
+    if (image.pixels.size() != pixelCount || output.pixels.size() != pixelCount) {
+        throw std::runtime_error("Image size does not match the GPU buffers");
+    }
+    std::array<cl_uint, 256> counts{};
+    checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, pixelCount, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
+    checkCL(clEnqueueWriteBuffer(cl.queue, histogramBuffer, CL_TRUE, 0, sizeof(counts), counts.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, histogramKernel, 1, nullptr, &pixelCount, nullptr, 0, nullptr, histogramEvent), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueReadBuffer(cl.queue, histogramBuffer, CL_TRUE, 0, sizeof(counts), counts.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+
+    Histogram histogram{};
+    std::copy(counts.begin(), counts.end(), histogram.begin());
     int threshold = calculateOtsuThreshold(histogram);
-
-    std::size_t Npixels = image.pixels.size();
-    std::size_t middle = Npixels / 2;
-
-    std::thread t1(applyThresholdRange, std::ref(result), threshold, 0, middle);
-    std::thread t2(applyThresholdRange, std::ref(result), threshold, middle, Npixels);
-    t1.join();
-    t2.join();
-    return result;
-}
-
-void checkCL(cl_int error, const char* operation) {
-    if (error != CL_SUCCESS) {
-        throw std::runtime_error(std::string(operation) + " failed: " + std::to_string(error));
-    }
-}
-
-Histogram calculateHistogramGPU(const Image& image) {
-    Histogram result{};
-
-    cl_uint platformCount = 0;
-    cl_int error;
-    checkCL(clGetPlatformIDs(0, nullptr, &platformCount), "clGetPlatformIDs");
-    std::vector<cl_platform_id> platforms(platformCount);
-    checkCL(clGetPlatformIDs(platformCount, platforms.data(), nullptr), "clGetPlatformIDs");
-
-    for (auto platform : platforms) {
-        cl_uint count = 0;
-        checkCL(clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &count), "clGetDeviceIDs");
-        std::vector<cl_device_id> devices(count);
-        checkCL(clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, count, devices.data(), nullptr), "clGetDeviceIDs");
-        for (auto device : devices) {
-            char name[256] = {};
-            checkCL(clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(name), name, nullptr), "clGetDeviceInfo");
-            cl_context context = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &error);
-            checkCL(error, "clCreateContext");
-            cl_command_queue queue = clCreateCommandQueue(context, device, 0, &error);
-            checkCL(error, "clCreateCommandQueue");
-            std::size_t bufferSize = image.pixels.size() * sizeof(unsigned char);
-            std::array<unsigned int, 256> gpuHistogram{};
-            cl_mem inputBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
-            checkCL(error, "clCreateBuffer");
-            cl_mem histogramBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, 256 * sizeof(unsigned int), nullptr, &error);
-            checkCL(error, "clCreateBuffer");
-            std::ifstream kernelFile("kernels/otsu.cl");
-            if (!kernelFile) throw std::runtime_error("Could not open kernels/otsu.cl");
-            std::stringstream kernelStream;
-            kernelStream << kernelFile.rdbuf();
-            std::string kernelSource = kernelStream.str();
-
-            const char* source = kernelSource.c_str();
-            cl_program program = clCreateProgramWithSource(context, 1, &source, nullptr, &error);
-            checkCL(error, "clCreateProgramWithSource");
-            checkCL(clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr), "clBuildProgram"); // OpenCL compile this program to the device - mac
-            cl_kernel kernel = clCreateKernel(program, "histogramKernel", &error);
-            checkCL(error, "clCreateKernel");
-            int Npixels = image.pixels.size();
-            checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
-            checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &histogramBuffer), "clSetKernelArg");
-            checkCL(clSetKernelArg(kernel, 2, sizeof(int), &Npixels), "clSetKernelArg");
-
-            std::size_t globalWorkSize = {static_cast<std::size_t>(image.pixels.size())};
-
-            checkCL(clEnqueueWriteBuffer(queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-            checkCL(clEnqueueWriteBuffer(queue, histogramBuffer, CL_TRUE, 0, 256 * sizeof(unsigned int), gpuHistogram.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-            checkCL(clEnqueueNDRangeKernel(queue, kernel, 1, nullptr, &globalWorkSize, nullptr, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");
-            checkCL(clFinish(queue), "clFinish");
-            checkCL(clEnqueueReadBuffer(queue, histogramBuffer, CL_TRUE, 0, 256 * sizeof(unsigned int), gpuHistogram.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
-
-            std::copy(gpuHistogram.begin(), gpuHistogram.end(), result.begin());
-            checkCL(clReleaseKernel(kernel), "clReleaseKernel");
-            checkCL(clReleaseProgram(program), "clReleaseProgram");
-            checkCL(clReleaseMemObject(inputBuffer), "clReleaseMemObject");
-            checkCL(clReleaseMemObject(histogramBuffer), "clReleaseMemObject");
-            checkCL(clReleaseCommandQueue(queue), "clReleaseCommandQueue");
-            checkCL(clReleaseContext(context), "clReleaseContext");
-        }
-
-    }
-
-    return result;
-}
-
-Image applyThresholdGPU(const Image& image, int threshold) {
-    Image result = image;
-    cl_uint platformCount = 0;
-    cl_int error;
-    checkCL(clGetPlatformIDs(0, nullptr, &platformCount), "clGetPlatformIDs");
-    std::vector<cl_platform_id> platforms(platformCount);
-    checkCL(clGetPlatformIDs(platformCount, platforms.data(), nullptr), "clGetPlatformIDs");
-
-    for (auto platform : platforms) {
-        cl_uint count = 0;
-        checkCL(clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &count), "clGetDeviceIDs");
-        std::vector<cl_device_id> devices(count);
-        checkCL(clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, count, devices.data(), nullptr), "clGetDeviceIDs");
-        for (auto device : devices) {
-            char name[256] = {};
-            checkCL(clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(name), name, nullptr), "clGetDeviceInfo");
-            cl_context context = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &error);
-            checkCL(error, "clCreateContext");
-            cl_command_queue queue = clCreateCommandQueue(context, device, 0, &error);
-            checkCL(error, "clCreateCommandQueue");
-            std::size_t bufferSize = image.pixels.size() * sizeof(unsigned char);
-            cl_mem inputBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
-            checkCL(error, "clCreateBuffer");
-            cl_mem outputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, bufferSize, nullptr, &error);
-            checkCL(error, "clCreateBuffer");
-            std::ifstream kernelFile("kernels/otsu.cl");
-            if (!kernelFile) throw std::runtime_error("Could not open kernels/otsu.cl");
-            std::stringstream kernelStream;
-            kernelStream << kernelFile.rdbuf();
-            std::string kernelSource = kernelStream.str();
-
-            const char* source = kernelSource.c_str();
-            cl_program program = clCreateProgramWithSource(context, 1, &source, nullptr, &error);
-            checkCL(error, "clCreateProgramWithSource");
-            checkCL(clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr), "clBuildProgram"); // OpenCL compile this program to the device - mac
-            cl_kernel kernel = clCreateKernel(program, "thresholdKernel", &error);
-            checkCL(error, "clCreateKernel");
-            int Npixels = image.pixels.size();
-            checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
-            checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
-            checkCL(clSetKernelArg(kernel, 2, sizeof(int), &Npixels), "clSetKernelArg");
-            checkCL(clSetKernelArg(kernel, 3, sizeof(int), &threshold), "clSetKernelArg");
-            std::size_t globalWorkSize = {static_cast<std::size_t>(image.pixels.size())};
-
-            checkCL(clEnqueueWriteBuffer(queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-            checkCL(clEnqueueNDRangeKernel(queue, kernel, 1, nullptr, &globalWorkSize, nullptr, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");
-            checkCL(clFinish(queue), "clFinish");
-            checkCL(clEnqueueReadBuffer(queue, outputBuffer, CL_TRUE, 0, bufferSize, result.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
-
-            checkCL(clReleaseKernel(kernel), "clReleaseKernel");
-            checkCL(clReleaseProgram(program), "clReleaseProgram");
-            checkCL(clReleaseMemObject(inputBuffer), "clReleaseMemObject");
-            checkCL(clReleaseMemObject(outputBuffer), "clReleaseMemObject");
-            checkCL(clReleaseCommandQueue(queue), "clReleaseCommandQueue");
-            checkCL(clReleaseContext(context), "clReleaseContext");
-        }
-    }
-    return result;
+    checkCL(clSetKernelArg(thresholdKernel, 3, sizeof(int), &threshold), "clSetKernelArg");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, thresholdKernel, 1, nullptr, &pixelCount, nullptr, 0, nullptr, thresholdEvent), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, pixelCount, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+    return histogram;
 }
 
 Image otsuSegmentationGPU(const Image& image) {
-    Histogram histogram = calculateHistogramGPU(image);
-    int threshold = calculateOtsuThreshold(histogram);
-    return applyThresholdGPU(image, threshold);
+    Image result = image;
+    OtsuGPU gpu(image);
+    gpu.run(image, result);
+    return result;
 }

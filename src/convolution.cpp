@@ -1,4 +1,5 @@
 #include "image_io.hpp"
+#include "parallel_utils.hpp"
 #include <array>
 #include <algorithm>
 #include <cmath>
@@ -9,8 +10,10 @@ Image convolution(const Image& image, const std::array<std::array<float, 3>, 3>&
     return result;
 }
 
-void convolution(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue, Image& result) {
-    convolutionRows(image, kernel, absoluteValue, result, 1, image.height - 1);
+void convolution(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue, Image& result, int threads) {
+    parallelRanges(std::max(0, image.height - 2), threads, [&](std::size_t begin, std::size_t end, int) {
+        convolutionRows(image, kernel, absoluteValue, result, static_cast<int>(begin) + 1, static_cast<int>(end) + 1);
+    });
 }
 
 void convolutionRows(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue, Image& result, int firstRow, int endRow) {

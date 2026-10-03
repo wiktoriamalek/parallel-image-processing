@@ -2,66 +2,30 @@ cmake_minimum_required(VERSION 3.16)
 project(img_proc LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenCL REQUIRED)
+find_package(Threads REQUIRED)
 
-add_executable(img_proc
-        src/main.cpp
-        tests/test_image_io.cpp
-        tests/image_thresholding_io.cpp
-)
-
-target_include_directories(img_proc PRIVATE include)
-target_link_libraries(img_proc PRIVATE OpenCL::OpenCL)
-
-add_executable(check_opencl
-        tests/check_opencl.cpp
-        tests/test_image_io.cpp
-        tests/image_thresholding_io.cpp
-)
-
-target_include_directories(check_opencl PRIVATE include)
-target_link_libraries(check_opencl PRIVATE OpenCL::OpenCL)
-
-add_executable(thresholding_time_comparison
-        tests/thresholding_time_comparison.cpp
-        tests/test_image_io.cpp
-        tests/image_thresholding_io.cpp
-)
-
-add_executable(identity_convolution_test
+add_library(image_processing
+        src/opencl_utils.cpp
+        src/common_benchmarking.cpp
         src/convolution.cpp
-        tests/test_image_io.cpp
-        tests/convolution_test.cpp
-)
-
-target_include_directories(identity_convolution_test PRIVATE include)
-target_link_libraries(identity_convolution_test PRIVATE OpenCL::OpenCL)
-
-target_include_directories(thresholding_time_comparison PRIVATE include)
-target_link_libraries(thresholding_time_comparison PRIVATE OpenCL::OpenCL)
-
-
-add_executable(otsu_test
         src/otsu.cpp
-        tests/otsu_test.cpp
-        tests/test_image_io.cpp
-)
-
-add_executable(distortion_test
         src/distortion.cpp
-        tests/distortion_test.cpp
         tests/test_image_io.cpp
+        tests/image_thresholding_io.cpp
 )
+target_include_directories(image_processing PUBLIC include)
+target_link_libraries(image_processing PUBLIC OpenCL::OpenCL Threads::Threads)
 
-target_include_directories(distortion_test PRIVATE include)
-target_link_libraries(distortion_test PRIVATE OpenCL::OpenCL)
+add_executable(img_proc src/main.cpp)
+add_executable(check_opencl tests/check_opencl.cpp)
+add_executable(thresholding_time_comparison tests/thresholding_time_comparison.cpp)
+add_executable(identity_convolution_test tests/convolution_test.cpp)
+add_executable(otsu_test tests/otsu_test.cpp)
+add_executable(distortion_test tests/distortion_test.cpp)
 
-
-target_include_directories(otsu_test PRIVATE include)
-target_link_libraries(otsu_test PRIVATE OpenCL::OpenCL)
-if(UNIX AND NOT APPLE)
-    target_link_libraries(img_proc PRIVATE pthread)
-    target_link_libraries(check_opencl PRIVATE pthread)
-    target_link_libraries(thresholding_time_comparison PRIVATE pthread)
-endif()
+foreach(target img_proc check_opencl thresholding_time_comparison identity_convolution_test otsu_test distortion_test)
+    target_link_libraries(${target} PRIVATE image_processing)
+endforeach()

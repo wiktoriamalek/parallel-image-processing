@@ -11,6 +11,7 @@ int main(int argc, char* argv[]) {
                                  "results/convolution_scaling.csv", {"--filter"});
         const std::map<std::string, std::array<std::array<float, 3>, 3>> filters = {
             {"identity", {{{0, 0, 0}, {0, 1, 0}, {0, 0, 0}}}},
+            // box blur 3x3 - it takes for each pixel, 9 values from the surrounding pixels and calculates mean
             {"box_blur", {{{1.0f/9, 1.0f/9, 1.0f/9}, {1.0f/9, 1.0f/9, 1.0f/9}, {1.0f/9, 1.0f/9, 1.0f/9}}}},
             {"sharpen", {{{0, -1, 0}, {-1, 5, -1}, {0, -1, 0}}}},
             {"edge_detection_h", {{{-1, -1, -1}, {0, 0, 0}, {1, 1, 1}}}},
@@ -30,11 +31,14 @@ int main(int argc, char* argv[]) {
         Image cpuResult = image;
         Image result = image;
         double cpu1 = measure([&] { convolution(image, filter, absoluteValue, cpuResult); }, options.repeats);
+        // multi-thread CPU
         double cpuN = measure([&] { convolution(image, filter, absoluteValue, result, options.threads); },
                               options.repeats, [] {}, [&](int) {
             if (result.pixels != cpuResult.pixels) throw std::runtime_error("CPU convolution results differ");
         });
 
+        // GPU
+        // Setup
         OpenCL cl("kernels/convolution.cl");
         cl_int error;
         std::size_t size = image.pixels.size();
@@ -42,7 +46,7 @@ int main(int argc, char* argv[]) {
         checkCL(error, "clCreateBuffer");
         cl_mem outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, size, nullptr, &error);
         checkCL(error, "clCreateBuffer");
-        cl_mem filterBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(gpuFilter), gpuFilter.data(), &error);
+        cl_mem filterBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(gpuFilter), gpuFilter.data(), &error); // create a memory on GPU and copy 9 elements there
         checkCL(error, "clCreateBuffer");
         cl_kernel kernel = clCreateKernel(cl.program, "convolution3x3", &error);
         checkCL(error, "clCreateKernel");
@@ -59,7 +63,7 @@ int main(int argc, char* argv[]) {
             checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, size, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
             checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, workSize, nullptr, 0, nullptr, &event), "clEnqueueNDRangeKernel");
             checkCL(clFinish(cl.queue), "clFinish");
-            checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, size, result.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+            checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, size, result.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
         }, options.repeats, [] {}, [&](int repeat) {
             double time = kernelTimeUs(event);
             checkCL(clReleaseEvent(event), "clReleaseEvent");

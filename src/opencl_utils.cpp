@@ -46,7 +46,7 @@ OpenCL::OpenCL(const std::string& kernelPath) {
         const char* text = source.c_str();
         program = clCreateProgramWithSource(context, 1, &text, nullptr, &error);
         checkCL(error, "clCreateProgramWithSource");
-        error = clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr);
+        error = clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr); // OpenCL compile this program to the device - mac
         if (error != CL_SUCCESS) {
             std::size_t size = 0;
             clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &size);

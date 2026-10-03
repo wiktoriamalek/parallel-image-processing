@@ -19,7 +19,7 @@ Histogram calculateHistogram(const Image& image, int threads) {
         calculateHistogramRange(image, partial[thread], begin, end);
     });
 
-    Histogram histogram{};
+    Histogram histogram{}; // resets all 256 counters to zero.
     for (const Histogram& part : partial) {
         for (int i=0; i<256; i++) {
             histogram[i] += part[i];
@@ -140,14 +140,14 @@ Histogram OtsuGPU::run(const Image& image, Image& output, cl_event* histogramEve
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, pixelCount, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
     checkCL(clEnqueueWriteBuffer(cl.queue, histogramBuffer, CL_TRUE, 0, sizeof(counts), counts.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
     checkCL(clEnqueueNDRangeKernel(cl.queue, histogramKernel, 1, nullptr, &pixelCount, nullptr, 0, nullptr, histogramEvent), "clEnqueueNDRangeKernel");
-    checkCL(clEnqueueReadBuffer(cl.queue, histogramBuffer, CL_TRUE, 0, sizeof(counts), counts.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+    checkCL(clEnqueueReadBuffer(cl.queue, histogramBuffer, CL_TRUE, 0, sizeof(counts), counts.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
 
     Histogram histogram{};
     std::copy(counts.begin(), counts.end(), histogram.begin());
     int threshold = calculateOtsuThreshold(histogram);
     checkCL(clSetKernelArg(thresholdKernel, 3, sizeof(int), &threshold), "clSetKernelArg");
     checkCL(clEnqueueNDRangeKernel(cl.queue, thresholdKernel, 1, nullptr, &pixelCount, nullptr, 0, nullptr, thresholdEvent), "clEnqueueNDRangeKernel");
-    checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, pixelCount, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+    checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, pixelCount, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
     return histogram;
 }
 

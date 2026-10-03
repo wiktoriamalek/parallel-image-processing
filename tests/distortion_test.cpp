@@ -12,16 +12,21 @@ int main(int argc, char* argv[]) {
     try {
         BenchmarkOptions options(argc, argv, "images/mitsubishi_resolution_change/mitsubishi_16384.png",
                                  "results/distortion_scaling.csv", {"--k1", "--k2"});
+        // Real image
         Image image = loadImage(options.image);
         float k1 = parseNumber<float>(options.parameter("--k1", "0.15"));
         float k2 = parseNumber<float>(options.parameter("--k2", "0.0"));
+        // Create distorted image
         Image distorted = distortRadial(image, k1, k2);
+        //saveImage("images/mitsubishi_distorted/mitusbishi_distorted_075_075.png", distorted);
         Image correctedCPU1 = distorted;
         Image correctedCPUN = distorted;
         Image correctedGPU = distorted;
         RadialDistortionGPU gpu(distorted, k1, k2);
 
+        // CPU1
         double cpu1 = measure([&] { correctRadialDistortionCPU(distorted, k1, k2, correctedCPU1); }, options.repeats);
+        // CPU2
         double cpuN = measure([&] { correctRadialDistortionCPU(distorted, k1, k2, correctedCPUN, options.threads); },
                               options.repeats, [] {}, [&](int) {
             if (correctedCPU1.pixels != correctedCPUN.pixels) {
@@ -29,6 +34,7 @@ int main(int argc, char* argv[]) {
             }
         });
 
+        // GPU
         std::vector<double> gpuKernelTimes;
         cl_event kernelEvent = nullptr;
         double gpuTotal = measure([&] { gpu.run(distorted, correctedGPU, &kernelEvent); },
@@ -38,6 +44,9 @@ int main(int argc, char* argv[]) {
             if (repeat >= 0) gpuKernelTimes.push_back(elapsed);
         });
         double gpuKernel = median(gpuKernelTimes);
+        //saveImage("results/distortion/CPU_1T/mitsubishi_distortion_075_075.png", correctedCPU1);
+        //saveImage("results/distortion/CPU2T/mitsubishi_distortion_075_075.png", correctedCPUN);
+        //saveImage("results/distortion/GPU/mitsubishi_distortion_GPU_075_075.png", correctedGPU);
 
         std::size_t differentPixels = 0;
         int maxDifference = 0;

@@ -123,6 +123,7 @@ RadialDistortionGPU::RadialDistortionGPU(const Image& image, float k1, float k2)
     : cl("kernels/distortion_correction.cl"),
       bufferSize(image.pixels.size() * sizeof(unsigned char)),
       globalWorkSize{static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)} {
+    // Setup
     try {
         cl_int error;
         inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
@@ -163,7 +164,7 @@ void RadialDistortionGPU::run(const Image& image, Image& output, cl_event* kerne
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
     checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
     checkCL(clFinish(cl.queue), "clFinish");
-    checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+    checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
 }
 
 Image correctRadialDistortionGPU(const Image& image, float k1, float k2) {

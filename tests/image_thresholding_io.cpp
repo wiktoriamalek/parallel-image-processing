@@ -16,7 +16,7 @@ Image thresholding(const Image& image, int threshold)
         throw std::runtime_error("Image size mismatch");
     }
 
-    Image result = image;
+    Image result = image; // we are modifying the copy
     ThresholdRange(result, threshold, 0, result.pixels.size());
     return result;
 }

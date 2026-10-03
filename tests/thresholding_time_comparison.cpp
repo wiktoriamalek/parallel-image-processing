@@ -17,17 +17,21 @@ int main(int argc, char* argv[]) {
         auto verify = [&](int) {
             if (result.pixels != expected.pixels) throw std::runtime_error("CPU threshold results differ");
         };
+        // test of 1-thread on CPU
         double cpu1 = measure([&] { ThresholdParallel(result, threshold, 1); }, options.repeats, reset, verify);
+        // multi-thread CPU
         double cpuN = measure([&] { ThresholdParallel(result, threshold, options.threads); }, options.repeats, reset, verify);
 
+        // GPU
+        // Setup
         OpenCL cl("kernels/threshold.cl");
         cl_int error;
         std::size_t size = image.pixels.size();
-        cl_mem buffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, size, nullptr, &error);
+        cl_mem buffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, size, nullptr, &error); // nullptr because now the buffor doesnt have pixels, its just for memory reservation
         checkCL(error, "clCreateBuffer");
         cl_kernel kernel = clCreateKernel(cl.program, "threshold_kernel", &error);
         checkCL(error, "clCreateKernel");
-        checkCL(clSetKernelArg(kernel, 0, sizeof(buffer), &buffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 0, sizeof(buffer), &buffer), "clSetKernelArg"); // which kernel do I set an argument for, argument number, argument size, argument content address
         checkCL(clSetKernelArg(kernel, 1, sizeof(threshold), &threshold), "clSetKernelArg");
         cl_event event = nullptr;
         std::vector<double> kernelTimes;
@@ -45,6 +49,7 @@ int main(int argc, char* argv[]) {
         clReleaseMemObject(buffer);
         double gpuKernel = median(kernelTimes);
 
+        // Save everything to a CSV file
         std::ostringstream row;
         row << std::setprecision(12) << std::quoted(options.image, '"', '"') << ','
             << image.width << ',' << image.height << ',' << threshold << ','

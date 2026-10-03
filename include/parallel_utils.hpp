@@ -18,6 +18,7 @@ void parallelRanges(std::size_t count, int threadCount, Function operation) {
     std::size_t block = count / threadCount;
     std::size_t remainder = count % threadCount;
     try {
+        // let's create threads
         for (int i = 0; i < threadCount; ++i) {
             std::size_t begin = block * i + std::min<std::size_t>(i, remainder);
             std::size_t end = begin + block + (static_cast<std::size_t>(i) < remainder);
@@ -27,5 +28,5 @@ void parallelRanges(std::size_t count, int threadCount, Function operation) {
         for (auto& thread : threads) thread.join();
         throw;
     }
-    for (auto& thread : threads) thread.join();
+    for (auto& thread : threads) thread.join(); // waiting for all of them to finish
 }

@@ -22,6 +22,7 @@ int main(int argc, char* argv[]) {
         // multi-thread CPU
         double cpuN = measure([&] { ThresholdParallel(result, threshold, options.threads); }, options.repeats, reset, verify);
 
+        double overheadN = measureThreadOverhead(options.threads, options.repeats);
         // GPU
         // Setup
         OpenCL cl("kernels/threshold.cl");
@@ -54,8 +55,8 @@ int main(int argc, char* argv[]) {
         row << std::setprecision(12) << std::quoted(options.image, '"', '"') << ','
             << image.width << ',' << image.height << ',' << threshold << ','
             << options.threads << ',' << options.repeats << ','
-            << cpu1 << ',' << cpuN << ',' << gpuKernel << ',' << gpuTotal;
-        appendCsv(options.output, "image,width,height,threshold,threads,repeats,cpu_1t_us,cpu_nt_us,gpu_kernel_us,gpu_total_us", row.str());
+            << cpu1 << ',' << cpuN << ',' << overheadN << ',' << gpuKernel << ',' << gpuTotal;
+        appendCsv(options.output, "image,width,height,threshold,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us", row.str());
         std::cout << "Median CPU1 / CPU" << options.threads << " / GPU total / GPU kernel [us]: "
                   << cpu1 << " / " << cpuN << " / " << gpuTotal << " / " << gpuKernel << '\n';
         return 0;

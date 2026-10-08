@@ -33,6 +33,7 @@ int main(int argc, char* argv[]) {
                 throw std::runtime_error("CPU distortion results differ");
             }
         });
+        double overheadN = measureThreadOverhead(options.threads, options.repeats);
 
         // GPU
         std::vector<double> gpuKernelTimes;
@@ -62,10 +63,10 @@ int main(int argc, char* argv[]) {
         std::ostringstream row;
         row << std::quoted(options.image, '"', '"') << ',' << image.width << ',' << image.height << ','
             << k1 << ',' << k2 << ',' << options.threads << ',' << options.repeats << ','
-            << cpu1 << ',' << cpuN << ',' << gpuKernel << ',' << gpuTotal << ','
+            << cpu1 << ',' << cpuN << ',' << overheadN << ',' << gpuKernel << ',' << gpuTotal << ','
             << differentPixels << ',' << differentPercent << ',' << maxDifference << ',' << meanDifference;
         appendCsv(options.output,
-                  "image,width,height,k1,k2,threads,repeats,cpu_1t_us,cpu_nt_us,gpu_kernel_us,gpu_total_us,different_pixels,different_percent,max_abs,mean_abs",
+                  "image,width,height,k1,k2,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us,different_pixels,different_percent,max_abs,mean_abs",
                   row.str());
         std::cout << "Median CPU1 / CPU" << options.threads << " / GPU total / GPU kernel [us]: "
                   << cpu1 << " / " << cpuN << " / " << gpuTotal << " / " << gpuKernel << '\n';

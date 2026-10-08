@@ -27,8 +27,7 @@ add_executable(thresholding_time_comparison tests/thresholding_time_comparison.c
 add_executable(identity_convolution_test tests/convolution_test.cpp)
 add_executable(otsu_test tests/otsu_test.cpp)
 add_executable(distortion_test tests/distortion_test.cpp)
-add_executable(bernsen_test tests/bernsen_test.cpp
-        tests/bernsen_test.cpp)
+add_executable(bernsen_test tests/bernsen_test.cpp)
 
 foreach(target img_proc check_opencl thresholding_time_comparison identity_convolution_test otsu_test distortion_test bernsen_test)
     target_link_libraries(${target} PRIVATE image_processing)

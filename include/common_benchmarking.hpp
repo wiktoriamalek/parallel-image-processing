@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "parallel_utils.hpp"
 
 template<typename T>
 double median(std::vector<T> values) {
@@ -21,15 +22,22 @@ double median(std::vector<T> values) {
 template<class Operation, class Before, class After>
 double measure(Operation operation, int repeats, Before before, After after) {
     if (repeats <= 0) throw std::invalid_argument("Repeat count must be positive");
+    // warm-up: at least 5 runs and at least 200 ms, so the CPU reaches full speed before measuring
+    auto warmUpEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    for (int warmUp = 0; warmUp < 5 || std::chrono::steady_clock::now() < warmUpEnd; ++warmUp) {
+        before();
+        operation();
+        after(-1);
+    }
     std::vector<double> times;
     times.reserve(repeats);
-    for (int repeat = -5; repeat < repeats; ++repeat) {
+    for (int repeat = 0; repeat < repeats; ++repeat) {
         before();
         auto start = std::chrono::steady_clock::now();
         operation();
         auto end = std::chrono::steady_clock::now();
         after(repeat);
-        if (repeat >= 0) times.push_back(std::chrono::duration<double, std::micro>(end - start).count());
+        times.push_back(std::chrono::duration<double, std::micro>(end - start).count());
     }
     return median(times);
 }
@@ -65,3 +73,7 @@ private:
 };
 
 void appendCsv(const std::string& path, const std::string& header, const std::string& row);
+
+inline double measureThreadOverhead(int threads, int repeats) {
+    return measure([&] {parallelRanges(threads, threads, [](std::size_t, std::size_t, int){});}, repeats);
+}

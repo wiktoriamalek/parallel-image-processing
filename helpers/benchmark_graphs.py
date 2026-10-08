@@ -9,7 +9,7 @@ import pandas as pd
 
 
 def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
-                    kernel_label="GPU: sam kernel"):
+                    kernel_label="GPU: sam kernel", overhead_batches=1):
     parser = argparse.ArgumentParser()
     parser.add_argument("csv", nargs="?", type=Path,
                         default=Path(__file__).resolve().parents[1] / "results" / default_file)
@@ -18,8 +18,9 @@ def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
     parameters = [*parameters, *numeric_parameters]
     integer_columns = ["width", "height", "threads", "repeats"]
     time_columns = ["cpu_1t_us", "cpu_nt_us", "gpu_kernel_us", "gpu_total_us"]
+    overhead_columns = ["overhead_nt_us"] if "overhead_nt_us" in data.columns else []
     positive_columns = [*integer_columns, *time_columns]
-    numeric_columns = [*positive_columns, *numeric_parameters]
+    numeric_columns = [*positive_columns, *overhead_columns, *numeric_parameters]
     data[numeric_columns] = data[numeric_columns].apply(pd.to_numeric)
     if data.empty or data[["image", *parameters]].isna().any().any():
         raise ValueError("Brak pomiarów, nazwy obrazu lub parametrów")
@@ -27,10 +28,14 @@ def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
         raise ValueError("Parametry, rozdzielczości i czasy muszą być skończonymi liczbami")
     if (data[positive_columns] <= 0).any().any():
         raise ValueError("Rozdzielczości, liczby wątków, powtórzeń i czasy muszą być dodatnie")
+    if (data[overhead_columns] < 0).any().any():
+        raise ValueError("Narzut wątków nie może być ujemny")
     if (data[integer_columns] % 1 != 0).any().any():
         raise ValueError("Rozdzielczości, liczby wątków i powtórzeń muszą być całkowite")
     data[integer_columns] = data[integer_columns].astype(int)
     data = data.drop_duplicates(["image", *integer_columns, *parameters], keep="last").copy()
+    if overhead_columns:
+        data["cpu_nt_corrected_us"] = data["cpu_nt_us"] - overhead_batches * data["overhead_nt_us"]
     data["pixels"] = data["width"] * data["height"]
     data["series"] = data["image"].map(image_series)
     output_dir = source.parent / f"{source.stem}_plots"
@@ -42,16 +47,25 @@ def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
         baseline = group.drop_duplicates(["width", "height"], keep="first")
         fig, ax = plt.subplots(figsize=(11, 6))
         ax.plot(baseline["pixels"], baseline["cpu_1t_us"], "o-", label="CPU: 1T")
+        nonpositive_corrected = False
         for threads, timings in group.groupby("threads"):
             if threads > 1:
-                ax.plot(timings["pixels"], timings["cpu_nt_us"], "s-", label=f"CPU: {threads}T")
+                line, = ax.plot(timings["pixels"], timings["cpu_nt_us"], "s-", label=f"CPU: {threads}T")
+                if overhead_columns:
+                    corrected = timings["cpu_nt_corrected_us"]
+                    ax.plot(timings["pixels"], corrected, "s--", color=line.get_color(),
+                            label=f"CPU: {threads}T − narzut (szacunek)")
+                    nonpositive_corrected |= (corrected <= 0).any()
         ax.plot(baseline["pixels"], baseline["gpu_total_us"], "^-",
                 label="GPU: zapis, obliczenia i odczyt")
         ax.plot(baseline["pixels"], baseline["gpu_kernel_us"], "D--", label=kernel_label)
         labels = baseline.groupby("pixels", sort=True).apply(
             lambda rows: " / ".join(f"{w}×{h}" for w, h in zip(rows["width"], rows["height"])))
         ax.set_xscale("log", base=2)
-        ax.set_yscale("log")
+        if nonpositive_corrected:
+            ax.set_yscale("symlog", linthresh=1)
+        else:
+            ax.set_yscale("log")
         ax.set_xticks(labels.index, labels)
         ax.set_xlabel("Rozdzielczość obrazu (pozycja według liczby pikseli)")
         ax.set_ylabel("Mediana czasu [µs]")

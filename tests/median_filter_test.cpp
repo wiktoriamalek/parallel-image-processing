@@ -8,12 +8,21 @@
 
 int main(int argc, char* argv[]) {
     try {
-        BenchmarkOptions options(argc, argv, "images/nuclear_noisy.png", "results/median_filter_scaling.csv");
+        BenchmarkOptions options(argc, argv, "images/nuclear_noisy.png", "results/median_filter_scaling.csv", {"--sort"});
+        std::string sort = options.parameter("--sort", "standard");
+        if (sort != "standard" && sort != "network") throw std::invalid_argument("--sort must be standard or network");
+        int sortingNetwork = sort == "network";
         Image image = loadImage(options.image);
         Image result = image; // borders are not filtered, so both results start as a copy of the image
         Image parallelResult = image;
-        double cpu1 = measure([&] { medianFilterParallel(image, result, 1); }, options.repeats);
-        double cpuN = measure([&] { medianFilterParallel(image, parallelResult, options.threads); },
+        Image referenceResult = image; // always std::nth_element, so the sorting network is checked against it
+        medianFilterParallel(image, referenceResult, 1, false);
+
+        double cpu1 = measure([&] { medianFilterParallel(image, result, 1, sortingNetwork); }, options.repeats);
+        if (result.pixels != referenceResult.pixels) {
+            throw std::runtime_error("Standard and network results differ!");
+        }
+        double cpuN = measure([&] { medianFilterParallel(image, parallelResult, options.threads, sortingNetwork); },
                               options.repeats, [] {}, [&](int) {
             if (result.pixels != parallelResult.pixels) {
                 throw std::runtime_error("CPU 1T and CPU many threads result differ!");
@@ -34,6 +43,7 @@ int main(int argc, char* argv[]) {
         error = clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer); checkCL(error, "clSetKernelArg");
         error = clSetKernelArg(kernel, 2, sizeof(cl_int), &image.width); checkCL(error, "clSetKernelArg");
         error = clSetKernelArg(kernel, 3, sizeof(cl_int), &image.height); checkCL(error, "clSetKernelArg");
+        error = clSetKernelArg(kernel, 4, sizeof(cl_int), &sortingNetwork); checkCL(error, "clSetKernelArg");
         std::size_t workSize[2] = {
             static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)
         };
@@ -65,11 +75,11 @@ int main(int argc, char* argv[]) {
         saveImage("results/median_filter/" + std::filesystem::path(options.image).stem().string() + "_median.png", result);
 
         std::ostringstream row;
-        row << std::setprecision(12) << std::quoted(options.image, '"', '"') << ','
+        row << std::setprecision(12) << std::quoted(options.image, '"', '"') << ',' << sort << ','
             << image.width << ',' << image.height << ',' << options.threads << ',' << options.repeats << ','
             << cpu1 << ',' << cpuN << ',' << overheadN << ',' << gpuKernel << ',' << gpuTotal;
-        appendCsv(options.output, "image,width,height,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us", row.str());
-        std::cout << "Median CPU1 / CPU" << options.threads << " / GPU total / GPU kernel [us]: "
+        appendCsv(options.output, "image,sort,width,height,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us", row.str());
+        std::cout << sort << " sort, median CPU1 / CPU" << options.threads << " / GPU total / GPU kernel [us]: "
                   << cpu1 << " / " << cpuN << " / " << gpuTotal << " / " << gpuKernel << '\n';
         return 0;
     } catch (const std::exception& error) {

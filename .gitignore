@@ -33,3 +33,5 @@ cmake-build-*/
 
 # Python
 __pycache__/
+/polecenie.png
+/TODO.md

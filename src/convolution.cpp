@@ -1,10 +1,10 @@
-#include "image_io.hpp"
+#include "convolution.hpp"
 #include "parallel_utils.hpp"
 #include <array>
 #include <algorithm>
 #include <cmath>
 
-Image convolution(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue = false) {
+Image convolution(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue) {
     Image result = image;
     convolution(image, kernel, absoluteValue, result);
     return result;

@@ -1,6 +1,4 @@
-#include "stb_image.h"
-#include "stb_image_write.h"
-#include "image_io.hpp"
+#include "thresholding.hpp"
 #include <cstddef>
 #include <stdexcept>
 #include "parallel_utils.hpp"

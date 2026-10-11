@@ -1,0 +1,11 @@
+image,width,height,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy_256.png,256,171,2,20,1682.646,1012.3125,14.417,1.3535,260.4375
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy_256.png,256,171,4,20,1890.1245,585.229,124.7295,0.347,329.0835
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy_512.png,512,341,2,20,7980.9585,3549.708,18.3745,1.104,281.271
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy_512.png,512,341,4,20,6671.729,1904.104,29.604,1.104,273.4165
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy_1024.png,1024,683,2,20,26533.229,14695.521,18.1875,4.128,472.125
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy_1024.png,1024,683,4,20,26989.1245,7783.771,28.7715,4.128,453.6045
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy_2048.png,2048,1365,2,20,111470.8335,58827.5415,18.4375,16.14,1086.146
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy_2048.png,2048,1365,4,20,112037.542,31998.646,27.146,16.1765,1083.3125
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy.png,3543,2362,2,20,346464.7085,179633.667,18.5625,48.325,3257.3125
+/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy.png,3543,2362,4,20,348272.9585,95008.3125,26.75,48.2745,3289.854

@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import re
 from pathlib import Path
 
@@ -23,15 +22,15 @@ def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
     numeric_columns = [*positive_columns, *overhead_columns, *numeric_parameters]
     data[numeric_columns] = data[numeric_columns].apply(pd.to_numeric)
     if data.empty or data[["image", *parameters]].isna().any().any():
-        raise ValueError("Brak pomiarów, nazwy obrazu lub parametrów")
+        raise ValueError("Missing measurements, image names or parameters")
     if not np.isfinite(data[numeric_columns].to_numpy()).all():
-        raise ValueError("Parametry, rozdzielczości i czasy muszą być skończonymi liczbami")
+        raise ValueError("Parameters, resolutions and times must be finite numbers")
     if (data[positive_columns] <= 0).any().any():
-        raise ValueError("Rozdzielczości, liczby wątków, powtórzeń i czasy muszą być dodatnie")
+        raise ValueError("Resolutions, thread counts, repeats and times must be positive")
     if (data[overhead_columns] < 0).any().any():
-        raise ValueError("Narzut wątków nie może być ujemny")
+        raise ValueError("Thread overhead must not be negative")
     if (data[integer_columns] % 1 != 0).any().any():
-        raise ValueError("Rozdzielczości, liczby wątków i powtórzeń muszą być całkowite")
+        raise ValueError("Resolutions, thread counts and repeats must be integers")
     data[integer_columns] = data[integer_columns].astype(int)
     data = data.drop_duplicates(["image", *integer_columns, *parameters], keep="last").copy()
     if overhead_columns:
@@ -74,9 +73,8 @@ def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
         ax.grid(True, which="major", alpha=0.3)
         ax.legend()
         fig.tight_layout()
-        name = re.sub(r"[^\w.-]+", "_", Path(key[0]).stem)
-        identifier = hashlib.sha256(repr(key).encode()).hexdigest()[:10]
-        fig.savefig(output_dir / f"{name}_{identifier}.png", dpi=200)
+        name = "_".join([Path(key[0]).stem, *(f"{column}{value}" for column, value in zip(group_columns[1:], key[1:]))])
+        fig.savefig(output_dir / (re.sub(r"[^\w.-]+", "_", name) + ".png"), dpi=200)
         plt.close(fig)
 
 

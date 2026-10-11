@@ -1,8 +1,8 @@
-#define CL_SILENCE_DEPRECATION
-#include <OpenCL/opencl.h>
+#include "opencl_utils.hpp"
 #include <iostream>
 #include <vector>
 #include "image_io.hpp"
+#include "thresholding.hpp"
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -12,7 +12,7 @@ int main() {
     cl_uint platformCount = 0;
     cl_int error = clGetPlatformIDs(0, nullptr, &platformCount);
     if (error != CL_SUCCESS || platformCount == 0) {
-        std::cerr << "Nie znaleziono platformy OpenCL. Kod: " << error << '\n';
+        std::cerr << "No OpenCL platform found. Code: " << error << '\n';
         return 1;
     }
 
@@ -25,7 +25,7 @@ int main() {
         cl_uint count = 0;
         error = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &count); // on a chosen platfrom we are searching for a device - GPU
         if (error != CL_SUCCESS) {
-            std::cerr << "Zapytanie o GPU: kod " << error << '\n';
+            std::cerr << "GPU query failed with code " << error << '\n';
             continue;
         }
         std::vector<cl_device_id> devices(count);
@@ -35,7 +35,7 @@ int main() {
             char name[256] = {};
             error = clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(name), name, nullptr); // information about a found device
             if (error != CL_SUCCESS) return 1;
-            std::cout << "GPU wykryte przez OpenCL: " << name << '\n';
+            std::cout << "GPU found by OpenCL: " << name << '\n';
             found = true;
             cl_context context = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &error);
 

@@ -11,10 +11,4 @@ struct Image {
     // (x,y) = y * image.width + x
 };
 
-struct Processed {
-    int width=0;
-    int height=0;
-    std::vector<unsigned char> pixels;
-};
-
 

@@ -1,0 +1,34 @@
+{
+  "source": "/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear.png",
+  "noisy_image": "/Users/wiktoriamalek/CLionProjects/parallel-image-processing/images/nuclear_noisy.png",
+  "seed": 20261011,
+  "noise_type": "salt_and_pepper",
+  "noise_fraction": 0.05,
+  "selected_pixels": 418428,
+  "changed_pixels": 418364,
+  "width": 3543,
+  "height": 2362,
+  "noisy": {
+    "mae": 6.370747748180513,
+    "mse": 1012.9967443645662,
+    "psnr_db": 18.07472311269502
+  },
+  "filtered": {
+    "mae": 5.842254216552752,
+    "mse": 121.23615730580364,
+    "psnr_db": 27.294481983268362
+  },
+  "mae_reduction_percent": 8.2956279626469,
+  "mse_reduction_percent": 88.03193021297884,
+  "reference_match": true,
+  "border_policy": "unchanged",
+  "build_type": "Release required; not detected automatically",
+  "repeats": 20,
+  "threads": [
+    2,
+    4
+  ],
+  "gpu": "Apple M3 Pro",
+  "system": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "binary": "/Users/wiktoriamalek/CLionProjects/parallel-image-processing/cmake-build-median-release/median_filter_test"
+}

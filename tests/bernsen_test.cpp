@@ -1,6 +1,7 @@
 #include "image_io.hpp"
 #include "common_benchmarking.hpp"
 #include "bernsen.hpp"
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include "opencl_utils.hpp"
@@ -10,51 +11,53 @@ int main(int argc, char* argv[]) {
     try {
         BenchmarkOptions options(argc, argv, "images/cms_resolution_change/cms_512.png","results/bernsen_scaling.csv",{"--radius", "--contrast"});
 
-    int radius = parseNumber<int>(options.parameter("--radius", "7"));
-    int minContrast = parseNumber<int>(options.parameter("--contrast", "15"));
+        int radius = parseNumber<int>(options.parameter("--radius", "7"));
+        int minContrast = parseNumber<int>(options.parameter("--contrast", "15"));
 
-    Image image = loadImage(options.image);
-    Image cpuResult = image;
-    Image result = image;
+        Image image = loadImage(options.image);
+        Image cpuResult = image;
+        Image result = image;
 
-    double cpu1 = measure([&] { // lambda can use through a reference variables mentioned!
-        bernsenThreshold(image, cpuResult, radius, minContrast, 1);
-    }, options.repeats);
+        double cpu1 = measure([&] { // lambda can use through a reference variables mentioned!
+            bernsenThreshold(image, cpuResult, radius, minContrast, 1);
+        }, options.repeats);
 
-    double cpuN = measure([&] {bernsenThreshold(image, result, radius, minContrast, options.threads);}, options.repeats);
-    double overheadN = measureThreadOverhead(options.threads, options.repeats);
+        double cpuN = measure([&] {bernsenThreshold(image, result, radius, minContrast, options.threads);}, options.repeats);
+        double overheadN = measureThreadOverhead(options.threads, options.repeats);
 
-    if (result.pixels != cpuResult.pixels) {
-        throw std::runtime_error("CPU Bernsen results differ");
-    }
+        if (result.pixels != cpuResult.pixels) {
+            throw std::runtime_error("CPU Bernsen results differ");
+        }
 
-    std::cout << "CPU 1 thread: " << cpu1 << " us = "<< cpu1/1e3<< "ms\n";
-    std::cout << "CPU " << options.threads << " threads: " << cpuN << " us = "<< cpuN/1e3<< "ms\n";
-    saveImage( "results/bernsen_4t_rep3_rad15_cont15_result.png", result);
+        std::cout << "CPU 1 thread: " << cpu1 << " us = "<< cpu1/1e3<< "ms\n";
+        std::cout << "CPU " << options.threads << " threads: " << cpuN << " us = "<< cpuN/1e3<< "ms\n";
+        std::filesystem::create_directories("results/bernsen");
+        saveImage("results/bernsen/" + std::filesystem::path(options.image).stem().string() + "_radius" +
+                  std::to_string(radius) + "_contrast" + std::to_string(minContrast) + ".png", result);
 
-    OpenCL cl("kernels/bernsen.cl");
-    cl_int error;
-    std::size_t size = image.pixels.size();
-    cl_mem inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, size, nullptr, &error);
-    checkCL(error, "clCreateBuffer");
+        OpenCL cl("kernels/bernsen.cl");
+        cl_int error;
+        std::size_t size = image.pixels.size();
+        cl_mem inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, size, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
 
-    cl_mem outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, size, nullptr, &error);
-    checkCL(error, "clCreateBuffer");
+        cl_mem outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, size, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
 
-    cl_kernel kernel = clCreateKernel(cl.program, "bernsen", &error);
-    checkCL(error, "clCreateKernel");
+        cl_kernel kernel = clCreateKernel(cl.program, "bernsen", &error);
+        checkCL(error, "clCreateKernel");
 
-    checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
-    checkCL(clSetKernelArg(kernel, 1, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
-    checkCL(clSetKernelArg(kernel, 2, sizeof(image.width), &image.width), "clSetKernelArg");
-    checkCL(clSetKernelArg(kernel, 3, sizeof(image.height), &image.height), "clSetKernelArg");
-    checkCL(clSetKernelArg(kernel, 4, sizeof(radius), &radius), "clSetKernelArg");
-    checkCL(clSetKernelArg(kernel, 5, sizeof(minContrast), &minContrast), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 1, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 2, sizeof(image.width), &image.width), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 3, sizeof(image.height), &image.height), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 4, sizeof(radius), &radius), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 5, sizeof(minContrast), &minContrast), "clSetKernelArg");
 
-    std::size_t workSize[2] = {
-        static_cast<std::size_t>(image.width),
-        static_cast<std::size_t>(image.height)
-    };
+        std::size_t workSize[2] = {
+            static_cast<std::size_t>(image.width),
+            static_cast<std::size_t>(image.height)
+        };
         cl_event event = nullptr;
         std::vector<double> kernelTimes;
         double gpuTotal = measure([&] {
@@ -85,7 +88,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    catch (std::exception& e) {
+    catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
         return 1;
     }

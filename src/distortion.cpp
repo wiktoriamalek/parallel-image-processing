@@ -156,7 +156,7 @@ RadialDistortionGPU::~RadialDistortionGPU() {
 }
 
 void RadialDistortionGPU::run(const Image& image, Image& output, cl_event* kernelEvent) {
-    if (image.width != globalWorkSize[0] || image.height != globalWorkSize[1] ||
+    if (static_cast<std::size_t>(image.width) != globalWorkSize[0] || static_cast<std::size_t>(image.height) != globalWorkSize[1] ||
         output.width != image.width || output.height != image.height ||
         image.pixels.size() != bufferSize || output.pixels.size() != bufferSize) {
         throw std::runtime_error("Image dimensions do not match the GPU buffers");

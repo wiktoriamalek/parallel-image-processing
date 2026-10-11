@@ -1,4 +1,5 @@
 #include "image_io.hpp"
+#include "thresholding.hpp"
 #include "common_benchmarking.hpp"
 #include "opencl_utils.hpp"
 #include <iomanip>

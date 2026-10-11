@@ -1,4 +1,5 @@
 #include "image_io.hpp"
+#include "convolution.hpp"
 #include "common_benchmarking.hpp"
 #include "opencl_utils.hpp"
 #include <iomanip>

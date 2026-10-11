@@ -1,4 +1,5 @@
 #include "image_io.hpp"
+#include "thresholding.hpp"
 #include <iostream>
 #include <stdexcept>
 
@@ -10,7 +11,7 @@ int main() {
         ThresholdParallel(divided, 128, 2);
 
         if (single.pixels == divided.pixels) {
-            std::cout << " Image are identical!" << std::endl;
+            std::cout << " Images are identical!" << std::endl;
         }
 
         std::cout << "Single pixels: " <<single.pixels.size() << std::endl;
@@ -19,14 +20,14 @@ int main() {
         if (!image.pixels.empty()) {
             std::cout << " First pixel:" << static_cast<int>(image.pixels.front()) << " ";
         };
-        saveImage("results/clic_threshold.png", single);
+        saveImage("results/clic_pictures/clic_threshold.png", single);
 
-        Image copy = loadImage("results/clic_copy.png");
+        Image copy = loadImage("results/clic_pictures/clic_copy.png");
 
 
 
         if (image.width != copy.width || image.height != copy.height || image.pixels != copy.pixels) {
-            throw std::runtime_error("Image are different");
+            throw std::runtime_error("Images are different");
         }
         else {
             std::cout << " Images are identical!" << std::endl;

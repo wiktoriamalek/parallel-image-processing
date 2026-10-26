@@ -101,7 +101,7 @@ OtsuGPU::OtsuGPU(const Image& image)
         checkCL(error, "clCreateBuffer");
         outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, pixelCount, nullptr, &error);
         checkCL(error, "clCreateBuffer");
-        histogramKernel = clCreateKernel(cl.program, "histogramKernel", &error);
+        histogramKernel = clCreateKernel(cl.program, "histogramLocalKernel", &error);
         checkCL(error, "clCreateKernel");
         thresholdKernel = clCreateKernel(cl.program, "thresholdKernel", &error);
         checkCL(error, "clCreateKernel");
@@ -133,13 +133,15 @@ OtsuGPU::~OtsuGPU() {
 
 // histogram on GPU -> Otsu threshold on CPU -> thresholding on GPU, the image is sent to the GPU only once
 Histogram OtsuGPU::run(const Image& image, Image& output, cl_event* histogramEvent, cl_event* thresholdEvent) {
+    const size_t localSize = 256;
+    const size_t globalSize = 256*localSize; // 256 work-groups, so every GPU core gets several of them, with only 2 groups most cores stay idle
     if (image.pixels.size() != pixelCount || output.pixels.size() != pixelCount) {
         throw std::runtime_error("Image size does not match the GPU buffers");
     }
     std::array<cl_uint, 256> counts{};
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, pixelCount, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
     checkCL(clEnqueueWriteBuffer(cl.queue, histogramBuffer, CL_TRUE, 0, sizeof(counts), counts.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, histogramKernel, 1, nullptr, &pixelCount, nullptr, 0, nullptr, histogramEvent), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, histogramKernel, 1, nullptr, &globalSize, &localSize, 0, nullptr, histogramEvent), "clEnqueueNDRangeKernel");
     checkCL(clEnqueueReadBuffer(cl.queue, histogramBuffer, CL_TRUE, 0, sizeof(counts), counts.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
 
     Histogram histogram{};

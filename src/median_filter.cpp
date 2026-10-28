@@ -1,6 +1,7 @@
 #include "median_filter.hpp"
 #include <array>
 #include <algorithm>
+#include <stdexcept>
 #include "parallel_utils.hpp"
 
 Image medianFilter(const Image& image) {
@@ -75,4 +76,49 @@ void medianFilterParallel(const Image& image, Image& result, int threads, bool s
         medianFilterRows(image, result, static_cast<int>(begin) + 1, static_cast<int>(end) + 1, sortingNetwork);
     });
 
+}
+
+MedianFilterGPU::MedianFilterGPU(const Image& image, bool sortingNetwork)
+    : cl("kernels/median_filter.cl"),
+      bufferSize(image.pixels.size()),
+      globalWorkSize{static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)} {
+    cl_int network = sortingNetwork;
+    try {
+        cl_int error;
+        inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer input");
+        outputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer output");
+        kernel = clCreateKernel(cl.program, "median_filter3x3", &error);
+        checkCL(error, "clCreateKernel");
+        checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 2, sizeof(cl_int), &image.width), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 3, sizeof(cl_int), &image.height), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 4, sizeof(cl_int), &network), "clSetKernelArg");
+    } catch (...) {
+        release();
+        throw;
+    }
+}
+
+void MedianFilterGPU::release() {
+    if (kernel) clReleaseKernel(kernel);
+    if (inputBuffer) clReleaseMemObject(inputBuffer);
+    if (outputBuffer) clReleaseMemObject(outputBuffer);
+}
+
+MedianFilterGPU::~MedianFilterGPU() {
+    release();
+}
+
+void MedianFilterGPU::run(const Image& image, Image& output, cl_event* kernelEvent) {
+    if (static_cast<std::size_t>(image.width) != globalWorkSize[0] || static_cast<std::size_t>(image.height) != globalWorkSize[1] ||
+        image.pixels.size() != bufferSize || output.pixels.size() != bufferSize) {
+        throw std::runtime_error("Image dimensions do not match the GPU buffers");
+    }
+    // image.pixels.data() is a data address on CPU
+    checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer"); // 0 means we dont wait for other events
+    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel"); // this function enqueues the execution of a kernel on an OpenCL device
+    checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
 }

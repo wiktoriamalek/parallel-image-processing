@@ -4,7 +4,6 @@ project(img_proc LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# without a build type the code is compiled without optimisations, which makes every time measurement useless
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -39,3 +38,24 @@ add_executable(median_filter_test tests/median_filter_test.cpp)
 foreach(target img_proc check_opencl thresholding_time_comparison identity_convolution_test otsu_test distortion_test bernsen_test median_filter_test)
     target_link_libraries(${target} PRIVATE image_processing)
 endforeach()
+
+if(APPLE)
+    list(APPEND CMAKE_PREFIX_PATH /opt/homebrew/opt/qt)
+endif()
+find_package(Qt6 COMPONENTS Widgets Concurrent QUIET)
+if(Qt6_FOUND)
+    add_executable(img_gui
+            gui/main.cpp
+            gui/main_window.cpp
+            gui/main_window.hpp
+            gui/image_view.cpp
+            gui/image_view.hpp
+            gui/algorithms.cpp
+            gui/algorithms.hpp
+    )
+    set_target_properties(img_gui PROPERTIES AUTOMOC ON)
+    target_link_libraries(img_gui PRIVATE image_processing Qt6::Widgets Qt6::Concurrent)
+    target_compile_definitions(img_gui PRIVATE PROJECT_DIR="${CMAKE_SOURCE_DIR}")
+else()
+    message(STATUS "Qt 6 not found, img_gui will not be built")
+endif()

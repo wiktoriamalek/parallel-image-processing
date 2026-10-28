@@ -102,18 +102,33 @@ void correctRadialDistortionRange(const Image &image, Image &output, float k1, f
             float distortedPixelX = distortedRelativeX + centerX;
             float distortedPixelY = distortedRelativeY + centerY;
 
-            int sourceX = std::lround(distortedPixelX);
-            int sourceY = std::lround(distortedPixelY);
+            // int sourceX = std::lround(distortedPixelX);
+            // int sourceY = std::lround(distortedPixelY);
 
+            int x0 = std::floor(distortedPixelX);
+            int y0 = std::floor(distortedPixelY);
+            int x1 = x0 +1;
+            int y1 = y0 +1;
+            float fx = distortedPixelX - x0;
+            float fy = distortedPixelY - y0;
             int destinationIndex = pixelY * image.width + pixelX;
 
-            if (sourceX < 0 || image.width <= sourceX || sourceY < 0 || image.height <= sourceY) {
+            if (distortedPixelX < 0 || image.width - 1 < distortedPixelX || distortedPixelY < 0 || image.height -1 < distortedPixelY) {
                 output.pixels[destinationIndex] = 0;
             }
 
             else {
-                int sourceIndex = sourceY * image.width + sourceX;
-                output.pixels[destinationIndex] = image.pixels[sourceIndex];
+                x1 = std::min(image.width - 1, x1);
+                y1 = std::min(image.height - 1, y1);
+                // int sourceIndex = y1 * image.width + x1;
+                // output.pixels[destinationIndex] = image.pixels[sourceIndex];
+                float p00 = image.pixels[y0*image.width+x0];
+                float p10 = image.pixels[y0*image.width+x1];
+                float p01 = image.pixels[y1*image.width+x0];
+                float p11 = image.pixels[y1*image.width+x1];
+                float top = (1-fx)*p00+fx*p10;
+                float bottom = (1-fx)*p01+fx*p11;
+                float value = (1-fy)*top+fy*bottom;
             }
         }
     }

@@ -1,6 +1,7 @@
 #include "bernsen.hpp"
 #include "parallel_utils.hpp"
 #include <algorithm>
+#include <stdexcept>
 
 void bernsenRows(const Image &image, Image &result, int radius, int minContrast, int firstRow, int endRow) {
     for (int y=firstRow; y<endRow; y++) {
@@ -45,4 +46,49 @@ void bernsenThreshold(const Image &image, Image &result, int radius, int minCont
     parallelRanges(image.height, threads, [&](std::size_t begin, std::size_t end, int) {
         bernsenRows(image, result, radius, minContrast, static_cast<int>(begin), static_cast<int>(end));
     });
+}
+
+BernsenGPU::BernsenGPU(const Image& image, int radius, int minContrast)
+    : cl("kernels/bernsen.cl"),
+      bufferSize(image.pixels.size()),
+      globalWorkSize{static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)} {
+    try {
+        cl_int error;
+        inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        kernel = clCreateKernel(cl.program, "bernsen", &error);
+        checkCL(error, "clCreateKernel");
+        checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 1, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 2, sizeof(image.width), &image.width), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 3, sizeof(image.height), &image.height), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 4, sizeof(radius), &radius), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 5, sizeof(minContrast), &minContrast), "clSetKernelArg");
+    } catch (...) {
+        release();
+        throw;
+    }
+}
+
+void BernsenGPU::release() {
+    if (kernel) clReleaseKernel(kernel);
+    if (inputBuffer) clReleaseMemObject(inputBuffer);
+    if (outputBuffer) clReleaseMemObject(outputBuffer);
+}
+
+BernsenGPU::~BernsenGPU() {
+    release();
+}
+
+void BernsenGPU::run(const Image& image, Image& output, cl_event* kernelEvent) {
+    if (static_cast<std::size_t>(image.width) != globalWorkSize[0] || static_cast<std::size_t>(image.height) != globalWorkSize[1] ||
+        image.pixels.size() != bufferSize || output.pixels.size() != bufferSize) {
+        throw std::runtime_error("Image dimensions do not match the GPU buffers");
+    }
+    checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
+    checkCL(clFinish(cl.queue), "clFinish");
+    checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
 }

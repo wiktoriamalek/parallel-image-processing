@@ -36,3 +36,37 @@ void ThresholdParallel(Image& image, int threshold, int numThreads) {
         ThresholdRange(image, threshold, begin, end);
     });
 }
+
+ThresholdGPU::ThresholdGPU(const Image& image, int threshold)
+    : cl("kernels/threshold.cl"), bufferSize(image.pixels.size()) {
+    try {
+        cl_int error;
+        buffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, bufferSize, nullptr, &error); // nullptr because now the buffor doesnt have pixels, its just for memory reservation
+        checkCL(error, "clCreateBuffer");
+        kernel = clCreateKernel(cl.program, "threshold_kernel", &error);
+        checkCL(error, "clCreateKernel");
+        checkCL(clSetKernelArg(kernel, 0, sizeof(buffer), &buffer), "clSetKernelArg"); // which kernel do I set an argument for, argument number, argument size, argument content address
+        checkCL(clSetKernelArg(kernel, 1, sizeof(threshold), &threshold), "clSetKernelArg");
+    } catch (...) {
+        release();
+        throw;
+    }
+}
+
+void ThresholdGPU::release() {
+    if (kernel) clReleaseKernel(kernel);
+    if (buffer) clReleaseMemObject(buffer);
+}
+
+ThresholdGPU::~ThresholdGPU() {
+    release();
+}
+
+void ThresholdGPU::run(const Image& image, Image& output, cl_event* kernelEvent) {
+    if (image.pixels.size() != bufferSize || output.pixels.size() != bufferSize) {
+        throw std::runtime_error("Image size does not match the GPU buffer");
+    }
+    checkCL(clEnqueueWriteBuffer(cl.queue, buffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 1, nullptr, &bufferSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueReadBuffer(cl.queue, buffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+}

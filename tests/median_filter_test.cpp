@@ -30,34 +30,11 @@ int main(int argc, char* argv[]) {
         });
         double overheadN = measureThreadOverhead(options.threads, options.repeats);
 
-        OpenCL cl("kernels/median_filter.cl");
-        std::size_t size = image.pixels.size();
-        cl_int error;
-        cl_mem inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, size, nullptr, &error);
-        checkCL(error, "clCreateBuffer input");
-        cl_mem outputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, size, nullptr, &error);
-        checkCL(error, "clCreateBuffer output");
-        cl_kernel kernel = clCreateKernel(cl.program, "median_filter3x3", &error);
-        checkCL(error, "clCreateKernel");
-        error = clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer); checkCL(error, "clSetKernelArg");
-        error = clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer); checkCL(error, "clSetKernelArg");
-        error = clSetKernelArg(kernel, 2, sizeof(cl_int), &image.width); checkCL(error, "clSetKernelArg");
-        error = clSetKernelArg(kernel, 3, sizeof(cl_int), &image.height); checkCL(error, "clSetKernelArg");
-        error = clSetKernelArg(kernel, 4, sizeof(cl_int), &sortingNetwork); checkCL(error, "clSetKernelArg");
-        std::size_t workSize[2] = {
-            static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)
-        };
+        MedianFilterGPU gpu(image, sortingNetwork);
         Image gpuResult = image;
         cl_event event = nullptr;
         std::vector<double> kernelTimes;
-        double gpuTotal = measure([&] {
-            error = clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, size, image.pixels.data(), 0, nullptr, nullptr); // 0 means we dont wait for other events
-            checkCL(error, "clEnqueueWriteBuffer");            // image.pixels.data() is a data address on CPU
-            error = clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, workSize, nullptr, 0, nullptr, &event); // this function enqueues the execution of a kernel on an OpenCL device
-            checkCL(error, "clEnqueueNDRangeKernel");
-            error = clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, size, gpuResult.pixels.data(), 0, nullptr, nullptr);
-            checkCL(error, "clEnqueueReadBuffer");
-        }, options.repeats, [] {}, [&](int repeat) {
+        double gpuTotal = measure([&] { gpu.run(image, gpuResult, &event); }, options.repeats, [] {}, [&](int repeat) {
             double time = kernelTimeUs(event);
             checkCL(clReleaseEvent(event), "clReleaseEvent");
             if (repeat >= 0) kernelTimes.push_back(time);
@@ -65,9 +42,6 @@ int main(int argc, char* argv[]) {
                 throw std::runtime_error("CPU and GPU results differ!");
             }
         });
-        clReleaseKernel(kernel);
-        clReleaseMemObject(inputBuffer);
-        clReleaseMemObject(outputBuffer);
         double gpuKernel = median(kernelTimes);
 
         //saveImage("results/nuclear_original_1t.png", result);

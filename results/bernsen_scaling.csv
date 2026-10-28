@@ -1,0 +1,6 @@
+image,radius,contrast,width,height,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us
+"images/cms_resolution_change/cms_256.png",7,15,256,256,11,20,5817.75,943.7915,62.1665,76.625,411.625
+"images/cms_resolution_change/cms_512.png",7,15,512,512,11,20,23331.4585,4420.6245,63.896,286.5,661
+"images/cms_resolution_change/cms_1024.png",7,15,1024,1024,11,20,93854.021,13827.333,68.667,1124.35416667,1573.7915
+"images/cms_resolution_change/cms_2048.png",7,15,2048,2048,11,20,376276.687,49452.083,63.2705,4526.66666667,5462.2915
+"images/cms_resolution_change/cms_4096.png",7,15,4096,4096,11,20,1492786.229,193014.6665,63.6875,18681.0208333,20500.229

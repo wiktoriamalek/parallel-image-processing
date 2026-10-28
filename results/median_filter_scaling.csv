@@ -1,0 +1,11 @@
+image,sort,width,height,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us
+"images/nuclear_noisy_256.png",standard,256,171,11,20,1578.7495,335.396,64.2505,14,255.6665
+"images/nuclear_noisy_512.png",standard,512,341,11,20,6825.021,1142.5415,65.187,44.125,265.937
+"images/nuclear_noisy_1024.png",standard,1024,683,11,20,27677.854,4879.375,97.917,165.041666667,455.5625
+"images/nuclear_noisy_2048.png",standard,2048,1365,11,20,114461.771,16672.729,63.479,646.166666667,1061.479
+"images/nuclear_noisy.png",standard,3543,2362,11,20,348606.9585,47284.271,70.1665,1934.77083333,2995.6875
+"images/nuclear_noisy_256.png",network,256,171,11,20,646.3755,189.3335,67.625,6.58333333333,253.7495
+"images/nuclear_noisy_512.png",network,512,341,11,20,3167.188,542.4585,61.396,18.5625,263.2505
+"images/nuclear_noisy_1024.png",network,1024,683,11,20,12530.4375,1946.2085,63.333,66.5,318.5625
+"images/nuclear_noisy_2048.png",network,2048,1365,11,20,52991.8335,8184.625,61,258.229166667,649.542
+"images/nuclear_noisy.png",network,3543,2362,11,20,155545.438,22170.375,63.271,781.1875,1695.396

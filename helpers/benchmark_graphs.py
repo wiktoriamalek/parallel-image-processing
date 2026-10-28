@@ -47,15 +47,15 @@ def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
         baseline = group.drop_duplicates(["width", "height"], keep="first")
         fig, ax = plt.subplots(figsize=(11, 6))
         ax.plot(baseline["pixels"], baseline["cpu_1t_us"], "o-", label="CPU: 1T")
-        nonpositive_corrected = False
         for threads, timings in group.groupby("threads"):
             if threads > 1:
                 line, = ax.plot(timings["pixels"], timings["cpu_nt_us"], "s-", label=f"CPU: {threads}T")
                 if overhead_columns:
-                    corrected = timings["cpu_nt_corrected_us"]
+                    # for small images the overhead overlaps with the work and the estimate drops to zero or below,
+                    # such points say nothing about the computation, so they are left out instead of bending the axis
+                    corrected = timings["cpu_nt_corrected_us"].where(timings["cpu_nt_corrected_us"] > 0)
                     ax.plot(timings["pixels"], corrected, "s--", color=line.get_color(),
                             label=f"CPU: {threads}T − narzut (szacunek)")
-                    nonpositive_corrected |= (corrected <= 0).any()
         ax.plot(baseline["pixels"], baseline["gpu_total_us"], "^-",
                 label="GPU: zapis, obliczenia i odczyt")
         if no_copy_columns:
@@ -65,10 +65,7 @@ def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
         labels = baseline.groupby("pixels", sort=True).apply(
             lambda rows: " / ".join(f"{w}×{h}" for w, h in zip(rows["width"], rows["height"])))
         ax.set_xscale("log", base=2)
-        if nonpositive_corrected:
-            ax.set_yscale("symlog", linthresh=1)
-        else:
-            ax.set_yscale("log")
+        ax.set_yscale("log")
         ax.set_xticks(labels.index, labels)
         ax.set_xlabel("Rozdzielczość obrazu (pozycja według liczby pikseli)")
         ax.set_ylabel("Mediana czasu [µs]")

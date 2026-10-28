@@ -1,0 +1,8 @@
+image,width,height,threshold,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us
+"images/clic_resolution_change/clic_256.png",256,256,128,11,20,18.25,57.334,142.1665,5.27083333333,226.125
+"images/clic_resolution_change/clic_512.png",512,512,128,11,20,69.917,71.396,63.5,14.7708333333,247.312
+"images/clic_resolution_change/clic_1024.png",1024,1024,128,11,20,284.2505,123.7915,98.875,52.3333333333,284.6045
+"images/clic_resolution_change/clic_2048.png",2048,2048,128,11,20,1163.5835,330.542,65.9375,205.729166667,665.2085
+"images/clic_resolution_change/clic_4096.png",4096,4096,128,11,20,4527.917,1003.1455,63.396,837.3125,1853.9585
+"images/clic_resolution_change/clic_8192.png",8192,8192,128,11,20,18282.292,3607.5205,65.375,3364.66666667,6900.9165
+"images/clic_resolution_change/clic_16384.png",16384,16384,128,11,20,74978.7085,13680.896,71.4375,13583.4375,27447.708

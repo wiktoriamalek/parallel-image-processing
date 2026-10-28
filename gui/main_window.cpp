@@ -171,7 +171,7 @@ QWidget* MainWindow::createControls() {
     modesLayout->addRow(threadsRow);
     modesLayout->addRow(gpuCheck);
     modesLayout->addRow("Powtórzenia", repeatsSpin);
-    modesLayout->addRow(note("Czas to mediana z powtórzeń, po rozgrzewce, jak w benchmarkach."));
+    modesLayout->addRow(note("Czas to mediana z powtórzeń."));
 
     runButton = new QPushButton("Uruchom");
     runButton->setEnabled(false);

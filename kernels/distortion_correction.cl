@@ -28,20 +28,33 @@ __kernel void distortion_correction(__global const unsigned char* input, __globa
     float distortedRelativeX = distortedX * scale ;
     float distortedRelativeY = distortedY * scale ;
 
-    float distortedx = distortedRelativeX + centerX;
-    float distortedy = distortedRelativeY + centerY;
+    float distortedPixelX = distortedRelativeX + centerX;
+    float distortedPixelY = distortedRelativeY + centerY;
 
-    int sourceX = (int)round(distortedx);
-    int sourceY = (int)round(distortedy);
-
+    int x0 = floor(distortedPixelX);
+    int y0 = floor(distortedPixelY);
+    int x1 = x0 +1;
+    int y1 = y0 +1;
+    float fx = distortedPixelX - x0;
+    float fy = distortedPixelY - y0;
     int destinationIndex = y * width + x;
 
-    if (sourceX < 0 || width <= sourceX || sourceY < 0 || height <= sourceY) {
+    if (distortedPixelX < 0 || width - 1 < distortedPixelX || distortedPixelY < 0 || height -1 < distortedPixelY) {
         output[destinationIndex] = 0;
     }
 
     else {
-        int sourceIndex = sourceY * width + sourceX;
-        output[destinationIndex] = input[sourceIndex];
+        x1 = min(width - 1, x1);
+        y1 = min(height - 1, y1);
+        // int sourceIndex = y1 * width + x1;
+        // output[destinationIndex] = input[sourceIndex];
+        float p00 = input[y0*width+x0];
+        float p10 = input[y0*width+x1];
+        float p01 = input[y1*width+x0];
+        float p11 = input[y1*width+x1];
+        float top = (1-fx)*p00+fx*p10;
+        float bottom = (1-fx)*p01+fx*p11;
+        float value = (1-fy)*top+fy*bottom;
+        output[destinationIndex] = (unsigned char)round(value);
     }
 }

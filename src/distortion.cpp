@@ -128,7 +128,8 @@ void correctRadialDistortionRange(const Image &image, Image &output, float k1, f
                 float p11 = image.pixels[y1*image.width+x1];
                 float top = (1-fx)*p00+fx*p10;
                 float bottom = (1-fx)*p01+fx*p11;
-                float value = (1-fy)*top+fy*bottom;
+                float value = static_cast<unsigned char>(std::lround((1-fy)*top+fy*bottom));
+                output.pixels[destinationIndex] = value;
             }
         }
     }

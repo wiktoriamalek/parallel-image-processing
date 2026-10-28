@@ -4,14 +4,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 resolutions = ["1024×1024", "4096×4096", "8192×8192"]
+# kernel times in microseconds, already converted from Apple's event ticks (×125/3, see kernelTimeUs)
 variants = {
-    "globalne atomiki": [4.06, 66.25, 285.20],
-    "lokalny histogram, 2 grupy": [13.04, 237.36, 950.31],
-    "lokalny histogram, 256 grup": [1.70, 26.39, 108.10],
+    "globalne atomiki": [169.4, 2760.5, 11883.5],
+    "lokalny histogram, 2 grupy": [543.2, 9890.2, 39596.4],
+    "lokalny histogram, 256 grup": [70.9, 1099.7, 4504.3],
 }
 groups = [2, 14, 56, 224, 1024]  # 8192×8192, measured in the same run as the global atomics value below
-groupTimes = [950.31, 209.65, 131.34, 107.44, 105.17]
-globalAtomics8192 = 285.20
+groupTimes = [39596.4, 8735.5, 5472.5, 4476.6, 4381.9]
+globalAtomics8192 = 11883.5
 
 project = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description="Otsu histogram on GPU: global atomics vs local histogram per work-group.")

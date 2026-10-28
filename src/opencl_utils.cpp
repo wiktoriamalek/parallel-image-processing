@@ -3,6 +3,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <vector>
+#ifdef __APPLE__
+#include <mach/mach_time.h>
+#endif
 
 void checkCL(cl_int error, const char* operation) {
     if (error != CL_SUCCESS) {
@@ -14,7 +17,15 @@ double kernelTimeUs(cl_event event) {
     cl_ulong start, end;
     checkCL(clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_START, sizeof(start), &start, nullptr), "clGetEventProfilingInfo");
     checkCL(clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END, sizeof(end), &end, nullptr), "clGetEventProfilingInfo");
-    return (end - start) / 1000.0;
+    double nanoseconds = static_cast<double>(end - start);
+#ifdef __APPLE__
+    // Apple's OpenCL returns these timestamps in mach_absolute_time ticks, not in nanoseconds as the standard says;
+    // on Apple Silicon one tick is 125/3 = 41.67 ns, so without this conversion kernel times were about 42 times too small
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+    nanoseconds = nanoseconds * timebase.numer / timebase.denom;
+#endif
+    return nanoseconds / 1000.0;
 }
 
 OpenCL::OpenCL(const std::string& kernelPath) {

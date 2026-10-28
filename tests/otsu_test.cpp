@@ -24,21 +24,33 @@ int main(int argc, char* argv[]) {
 
         OtsuGPU gpu(image);
         Image gpuResult = image;
-        Histogram gpuHistogram{};
         cl_event histogramEvent = nullptr;
+        cl_event otsuThresholdEvent = nullptr;
         cl_event thresholdEvent = nullptr;
         std::vector<double> kernelTimes;
-        double gpuTotal = measure([&] { gpuHistogram = gpu.run(image, gpuResult, &histogramEvent, &thresholdEvent); },
+        double gpuTotal = measure([&] { gpu.run(image, gpuResult, &histogramEvent, &otsuThresholdEvent, &thresholdEvent); },
                                   options.repeats, [] {}, [&](int repeat) {
-            double time = kernelTimeUs(histogramEvent) + kernelTimeUs(thresholdEvent);
+            // the three kernels of the algorithm, the tiny kernel that zeroes the histogram is not counted
+            double time = kernelTimeUs(histogramEvent) + kernelTimeUs(otsuThresholdEvent) + kernelTimeUs(thresholdEvent);
             checkCL(clReleaseEvent(histogramEvent), "clReleaseEvent");
+            checkCL(clReleaseEvent(otsuThresholdEvent), "clReleaseEvent");
             checkCL(clReleaseEvent(thresholdEvent), "clReleaseEvent");
             if (repeat >= 0) kernelTimes.push_back(time);
-            if (gpuHistogram != histogram || gpuResult.pixels != cpuResult.pixels) {
+            if (gpuResult.pixels != cpuResult.pixels) {
                 throw std::runtime_error("GPU and CPU Otsu results differ");
             }
         });
         double gpuKernel = median(kernelTimes);
+
+        // the image stays on the GPU: it is sent once before the measurement and the result is read once after it,
+        // so only the three kernels, their launch and the waiting for the GPU are measured
+        gpu.upload(image);
+        double gpuNoCopy = measure([&] { gpu.compute(); gpu.finish(); }, options.repeats);
+        Image gpuNoCopyResult = image; // a fresh image, so the check below really tests what came back from the GPU
+        gpu.download(gpuNoCopyResult);
+        if (gpuNoCopyResult.pixels != cpuResult.pixels) {
+            throw std::runtime_error("GPU without copying and CPU Otsu results differ");
+        }
         int threshold = calculateOtsuThreshold(histogram);
 
         // CPU and GPU results are identical at this point, so one image and one histogram are enough
@@ -58,10 +70,10 @@ int main(int argc, char* argv[]) {
         row << std::setprecision(12) << std::quoted(options.image, '"', '"') << ','
             << image.width << ',' << image.height << ',' << threshold << ','
             << options.threads << ',' << options.repeats << ','
-            << cpu1 << ',' << cpuN << ',' << overheadN << ',' << gpuKernel << ',' << gpuTotal;
-        appendCsv(options.output, "image,width,height,threshold,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us", row.str());
-        std::cout << "Median CPU1 / CPU" << options.threads << " / GPU total / GPU kernels [us]: "
-                  << cpu1 << " / " << cpuN << " / " << gpuTotal << " / " << gpuKernel << '\n';
+            << cpu1 << ',' << cpuN << ',' << overheadN << ',' << gpuKernel << ',' << gpuTotal << ',' << gpuNoCopy;
+        appendCsv(options.output, "image,width,height,threshold,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us,gpu_no_copy_us", row.str());
+        std::cout << "Median CPU1 / CPU" << options.threads << " / GPU total / GPU without copying / GPU kernels [us]: "
+                  << cpu1 << " / " << cpuN << " / " << gpuTotal << " / " << gpuNoCopy << " / " << gpuKernel << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

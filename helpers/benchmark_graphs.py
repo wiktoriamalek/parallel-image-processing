@@ -18,7 +18,8 @@ def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
     integer_columns = ["width", "height", "threads", "repeats"]
     time_columns = ["cpu_1t_us", "cpu_nt_us", "gpu_kernel_us", "gpu_total_us"]
     overhead_columns = ["overhead_nt_us"] if "overhead_nt_us" in data.columns else []
-    positive_columns = [*integer_columns, *time_columns]
+    no_copy_columns = ["gpu_no_copy_us"] if "gpu_no_copy_us" in data.columns else []
+    positive_columns = [*integer_columns, *time_columns, *no_copy_columns]
     numeric_columns = [*positive_columns, *overhead_columns, *numeric_parameters]
     data[numeric_columns] = data[numeric_columns].apply(pd.to_numeric)
     if data.empty or data[["image", *parameters]].isna().any().any():
@@ -57,6 +58,9 @@ def plot_benchmarks(default_file, title, parameters=(), numeric_parameters=(),
                     nonpositive_corrected |= (corrected <= 0).any()
         ax.plot(baseline["pixels"], baseline["gpu_total_us"], "^-",
                 label="GPU: zapis, obliczenia i odczyt")
+        if no_copy_columns:
+            ax.plot(baseline["pixels"], baseline["gpu_no_copy_us"], "v-",
+                    label="GPU: bez kopiowania (obraz na karcie)")
         ax.plot(baseline["pixels"], baseline["gpu_kernel_us"], "D--", label=kernel_label)
         labels = baseline.groupby("pixels", sort=True).apply(
             lambda rows: " / ".join(f"{w}×{h}" for w, h in zip(rows["width"], rows["height"])))

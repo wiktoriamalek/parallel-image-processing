@@ -22,6 +22,7 @@ add_library(image_processing
         src/bernsen.cpp
         src/median_filter.cpp
         src/resize.cpp
+        src/region_growing.cpp
 )
 
 target_include_directories(image_processing PUBLIC include)

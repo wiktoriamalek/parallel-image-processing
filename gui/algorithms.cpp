@@ -5,8 +5,11 @@
 #include "distortion.hpp"
 #include "median_filter.hpp"
 #include "otsu.hpp"
+#include "resize.hpp"
 #include "thresholding.hpp"
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -63,6 +66,12 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return {measure([&] {
                 correctRadialDistortionCPU(image, parameters.k1, parameters.k2, output, threads);
             }, repeats)};
+        case Algorithm::Resize: {
+            int width = std::max(1, static_cast<int>(std::lround(image.width * parameters.scale)));
+            int height = std::max(1, static_cast<int>(std::lround(image.height * parameters.scale)));
+            if (parameters.bilinear) return {measure([&] { output = resizeBilinearCPU(image, width, height, threads); }, repeats)};
+            return {measure([&] { output = resizeNearestCPU(image, width, height, threads); }, repeats)};
+        }
     }
     throw std::logic_error("Unknown algorithm");
 }
@@ -113,6 +122,15 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             RadialDistortionGPU gpu(image, parameters.k1, parameters.k2);
             return measureGPU(gpu, image, repeats, output);
         }
+        case Algorithm::Resize: {
+            int width = std::max(1, static_cast<int>(std::lround(image.width * parameters.scale)));
+            int height = std::max(1, static_cast<int>(std::lround(image.height * parameters.scale)));
+            output.width = width;
+            output.height = height;
+            output.pixels.resize(static_cast<std::size_t>(width) * height);
+            ResizeGPU gpu(image, width, height, parameters.bilinear);
+            return measureGPU(gpu, image, repeats, output);
+        }
     }
     throw std::logic_error("Unknown algorithm");
 }
@@ -126,6 +144,7 @@ const std::vector<std::string>& convolutionFilterNames() {
     }();
     return names;
 }
+
 
 Timing runAlgorithm(Algorithm algorithm, Mode mode, const Image& image, const Parameters& parameters,
                     int threads, int repeats, Image& output) {

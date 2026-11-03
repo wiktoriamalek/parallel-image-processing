@@ -28,7 +28,7 @@
 
 namespace {
 const char* algorithmNames[] = {"Progowanie", "Otsu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
-                                "Korekcja dystorsji"};
+                                "Korekcja dystorsji", "Zmiana rozmiaru"};
 
 QImage toQImage(const Image& image) {
     return QImage(image.pixels.data(), image.width, image.height, image.width, QImage::Format_Grayscale8).copy();
@@ -135,6 +135,14 @@ QWidget* MainWindow::createControls() {
     }
     k1Spin->setValue(defaults.k1);
     k2Spin->setValue(defaults.k2);
+    interpolationBox = new QComboBox;
+    interpolationBox->addItems({"Najbliższy sąsiad", "Dwuliniowa"});
+    interpolationBox->setCurrentIndex(defaults.bilinear ? 1 : 0);
+    scaleSpin = new QDoubleSpinBox;
+    scaleSpin->setRange(0.05, 4.0);
+    scaleSpin->setDecimals(2);
+    scaleSpin->setSingleStep(0.25);
+    scaleSpin->setValue(defaults.scale);
 
     parameterPages = new QStackedWidget;
     parameterPages->addWidget(parameterPage({{"Próg", thresholdSpin}}));
@@ -144,6 +152,7 @@ QWidget* MainWindow::createControls() {
     parameterPages->addWidget(parameterPage({{"", sortingNetworkCheck}}));
     parameterPages->addWidget(parameterPage({{"k1", k1Spin}, {"k2", k2Spin},
         {"", note("Wczytaj zniekształcony obraz, np. z images/mitsubishi_distorted.")}}));
+    parameterPages->addWidget(parameterPage({{"Interpolacja", interpolationBox}, {"Skala", scaleSpin}}));
     connect(algorithmBox, &QComboBox::currentIndexChanged, parameterPages, &QStackedWidget::setCurrentIndex);
 
     auto* algorithmGroup = new QGroupBox("Algorytm");
@@ -231,9 +240,12 @@ void MainWindow::saveResult() {
 }
 
 void MainWindow::run() {
+    Algorithm algorithm = currentAlgorithm();
     std::vector<std::pair<Mode, QString>> modes;
     if (cpu1Check->isChecked()) modes.emplace_back(Mode::CPU1, "CPU, 1 wątek");
-    if (cpuNCheck->isChecked()) modes.emplace_back(Mode::CPUN, QString("CPU, %1 wątków").arg(threadsSpin->value()));
+    if (cpuNCheck->isChecked()) {
+        modes.emplace_back(Mode::CPUN, QString("CPU, %1 wątków").arg(threadsSpin->value()));
+    }
     if (gpuCheck->isChecked()) modes.emplace_back(Mode::GPU, "GPU");
     if (modes.empty()) {
         statusBar()->showMessage("Zaznacz co najmniej jeden tryb");
@@ -242,7 +254,7 @@ void MainWindow::run() {
 
     setRunning(true);
     statusBar()->showMessage("Liczenie…");
-    watcher.setFuture(QtConcurrent::run([image = input, algorithm = currentAlgorithm(), parameters = currentParameters(),
+    watcher.setFuture(QtConcurrent::run([image = input, algorithm, parameters = currentParameters(),
                                          threads = threadsSpin->value(), repeats = repeatsSpin->value(), modes] {
         RunOutcome outcome;
         try {
@@ -294,8 +306,10 @@ void MainWindow::runFinished() {
 
 void MainWindow::showResult(int row) {
     if (row < 0 || row >= static_cast<int>(results.size())) return;
-    outputView->setImage(toQImage(results[row].output));
-    outputCaption->setText("Wynik: " + results[row].name);
+    const ModeResult& result = results[row];
+    outputView->setImage(toQImage(result.output));
+    outputCaption->setText(QString("Wynik: %1 (%2 × %3 px)").arg(result.name).arg(result.output.width)
+                               .arg(result.output.height));
 }
 
 void MainWindow::setRunning(bool running) {
@@ -317,5 +331,7 @@ Parameters MainWindow::currentParameters() const {
     parameters.sortingNetwork = sortingNetworkCheck->isChecked();
     parameters.k1 = static_cast<float>(k1Spin->value());
     parameters.k2 = static_cast<float>(k2Spin->value());
+    parameters.bilinear = interpolationBox->currentIndex() == 1;
+    parameters.scale = static_cast<float>(scaleSpin->value());
     return parameters;
 }

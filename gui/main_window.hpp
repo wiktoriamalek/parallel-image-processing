@@ -68,6 +68,8 @@ private:
     QCheckBox* sortingNetworkCheck;
     QDoubleSpinBox* k1Spin;
     QDoubleSpinBox* k2Spin;
+    QComboBox* interpolationBox;
+    QDoubleSpinBox* scaleSpin;
     QCheckBox* cpu1Check;
     QCheckBox* cpuNCheck;
     QCheckBox* gpuCheck;

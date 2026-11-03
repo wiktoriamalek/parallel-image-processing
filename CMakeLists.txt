@@ -21,6 +21,7 @@ add_library(image_processing
         src/thresholding.cpp
         src/bernsen.cpp
         src/median_filter.cpp
+        src/resize.cpp
 )
 
 target_include_directories(image_processing PUBLIC include)

@@ -43,6 +43,7 @@ private:
     void runFinished();
     void showResult(int row);
     void setRunning(bool running);
+    void updateSeedMarker();
     Algorithm currentAlgorithm() const;
     Parameters currentParameters() const;
 
@@ -70,6 +71,10 @@ private:
     QDoubleSpinBox* k2Spin;
     QComboBox* interpolationBox;
     QDoubleSpinBox* scaleSpin;
+    QSpinBox* seedXSpin;
+    QSpinBox* seedYSpin;
+    QSpinBox* toleranceSpin;
+    QCheckBox* localTilesCheck;
     QCheckBox* cpu1Check;
     QCheckBox* cpuNCheck;
     QCheckBox* gpuCheck;

@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-enum class Algorithm { Threshold, Otsu, Bernsen, Convolution, MedianFilter, Distortion, Resize };
+enum class Algorithm { Threshold, Otsu, Bernsen, Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
 enum class Mode { CPU1, CPUN, GPU };
 
 struct Parameters {
@@ -16,6 +16,10 @@ struct Parameters {
     float k2 = 0.0f;
     bool bilinear = true;
     float scale = 2.0f;
+    int seedX = 0;
+    int seedY = 0;
+    int tolerance = 20;
+    bool localTiles = true;
 };
 
 struct Timing {

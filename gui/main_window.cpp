@@ -23,12 +23,13 @@
 #include <algorithm>
 #include <exception>
 #include <initializer_list>
+#include <optional>
 #include <thread>
 #include <utility>
 
 namespace {
 const char* algorithmNames[] = {"Progowanie", "Otsu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
-                                "Korekcja dystorsji", "Zmiana rozmiaru"};
+                                "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru"};
 
 QImage toQImage(const Image& image) {
     return QImage(image.pixels.data(), image.width, image.height, image.width, QImage::Format_Grayscale8).copy();
@@ -100,6 +101,11 @@ MainWindow::MainWindow() {
     layout->addLayout(rightLayout, 1);
     setCentralWidget(central);
 
+    inputView->setClickHandler([this](QPoint point) {
+        if (currentAlgorithm() != Algorithm::RegionGrowing) return;
+        seedXSpin->setValue(point.x());
+        seedYSpin->setValue(point.y());
+    });
     connect(&watcher, &QFutureWatcher<RunOutcome>::finished, this, &MainWindow::runFinished);
     statusBar()->showMessage("Otwórz obraz, żeby zacząć");
 }
@@ -143,6 +149,17 @@ QWidget* MainWindow::createControls() {
     scaleSpin->setDecimals(2);
     scaleSpin->setSingleStep(0.25);
     scaleSpin->setValue(defaults.scale);
+    seedXSpin = new QSpinBox;
+    seedYSpin = new QSpinBox;
+    for (auto* spin : {seedXSpin, seedYSpin}) {
+        spin->setRange(0, 0);
+        connect(spin, &QSpinBox::valueChanged, this, &MainWindow::updateSeedMarker);
+    }
+    toleranceSpin = new QSpinBox;
+    toleranceSpin->setRange(0, 255);
+    toleranceSpin->setValue(defaults.tolerance);
+    localTilesCheck = new QCheckBox("GPU: kafelki w pamięci lokalnej");
+    localTilesCheck->setChecked(defaults.localTiles);
 
     parameterPages = new QStackedWidget;
     parameterPages->addWidget(parameterPage({{"Próg", thresholdSpin}}));
@@ -153,7 +170,12 @@ QWidget* MainWindow::createControls() {
     parameterPages->addWidget(parameterPage({{"k1", k1Spin}, {"k2", k2Spin},
         {"", note("Wczytaj zniekształcony obraz, np. z images/mitsubishi_distorted.")}}));
     parameterPages->addWidget(parameterPage({{"Interpolacja", interpolationBox}, {"Skala", scaleSpin}}));
+    parameterPages->addWidget(parameterPage({{"Ziarno x", seedXSpin}, {"Ziarno y", seedYSpin}, {"Tolerancja", toleranceSpin},
+        {"", localTilesCheck},
+        {"", note("Kliknij obraz wejściowy, żeby wybrać ziarno. Bez kafelków GPU dokłada 1 piksel na iterację, "
+                  "więc duży obszar liczy się nawet sekundy.")}}));
     connect(algorithmBox, &QComboBox::currentIndexChanged, parameterPages, &QStackedWidget::setCurrentIndex);
+    connect(algorithmBox, &QComboBox::currentIndexChanged, this, &MainWindow::updateSeedMarker);
 
     auto* algorithmGroup = new QGroupBox("Algorytm");
     auto* algorithmLayout = new QVBoxLayout(algorithmGroup);
@@ -212,6 +234,11 @@ void MainWindow::openImage(const QString& path) {
     inputView->setImage(toQImage(input));
     inputCaption->setText(QString("Obraz wejściowy: %1 (%2 × %3 px)")
                               .arg(QFileInfo(path).fileName()).arg(input.width).arg(input.height));
+    seedXSpin->setRange(0, input.width - 1);
+    seedYSpin->setRange(0, input.height - 1);
+    seedXSpin->setValue(input.width / 2);
+    seedYSpin->setValue(input.height / 2);
+    updateSeedMarker();
     results.clear();
     table->setRowCount(0);
     outputView->setImage(QImage());
@@ -318,6 +345,14 @@ void MainWindow::setRunning(bool running) {
     saveButton->setEnabled(!running && !results.empty());
 }
 
+void MainWindow::updateSeedMarker() {
+    if (currentAlgorithm() == Algorithm::RegionGrowing && !input.pixels.empty()) {
+        inputView->setMarker(QPoint(seedXSpin->value(), seedYSpin->value()));
+    } else {
+        inputView->setMarker(std::nullopt);
+    }
+}
+
 Algorithm MainWindow::currentAlgorithm() const {
     return static_cast<Algorithm>(algorithmBox->currentIndex());
 }
@@ -333,5 +368,9 @@ Parameters MainWindow::currentParameters() const {
     parameters.k2 = static_cast<float>(k2Spin->value());
     parameters.bilinear = interpolationBox->currentIndex() == 1;
     parameters.scale = static_cast<float>(scaleSpin->value());
+    parameters.seedX = seedXSpin->value();
+    parameters.seedY = seedYSpin->value();
+    parameters.tolerance = toleranceSpin->value();
+    parameters.localTiles = localTilesCheck->isChecked();
     return parameters;
 }

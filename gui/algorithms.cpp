@@ -5,6 +5,7 @@
 #include "distortion.hpp"
 #include "median_filter.hpp"
 #include "otsu.hpp"
+#include "region_growing.hpp"
 #include "resize.hpp"
 #include "thresholding.hpp"
 #include <algorithm>
@@ -72,6 +73,15 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             if (parameters.bilinear) return {measure([&] { output = resizeBilinearCPU(image, width, height, threads); }, repeats)};
             return {measure([&] { output = resizeNearestCPU(image, width, height, threads); }, repeats)};
         }
+        case Algorithm::RegionGrowing:
+            if (threads == 1) {
+                return {measure([&] {
+                    output = regionGrowingCPU(image, parameters.seedX, parameters.seedY, parameters.tolerance);
+                }, repeats)};
+            }
+            return {measure([&] {
+                output = regionGrowingCPUParallel(image, parameters.seedX, parameters.seedY, parameters.tolerance, threads);
+            }, repeats)};
     }
     throw std::logic_error("Unknown algorithm");
 }
@@ -91,6 +101,18 @@ Timing runOtsuGPU(const Image& image, int repeats, Image& output) {
         checkCL(clReleaseEvent(otsuThresholdEvent), "clReleaseEvent");
         checkCL(clReleaseEvent(thresholdEvent), "clReleaseEvent");
         if (repeat >= 0) kernelTimes.push_back(time);
+    });
+    timing.kernelUs = median(kernelTimes);
+    return timing;
+}
+
+Timing runRegionGrowingGPU(const Image& image, const Parameters& parameters, int repeats, Image& output) {
+    RegionGrowingGPU gpu(image, parameters.seedX, parameters.seedY, parameters.tolerance, parameters.localTiles);
+    Timing timing;
+    std::vector<double> kernelTimes;
+    double kernelUs = 0.0;
+    timing.totalUs = measure([&] { gpu.run(image, output, &kernelUs); }, repeats, [] {}, [&](int repeat) {
+        if (repeat >= 0) kernelTimes.push_back(kernelUs);
     });
     timing.kernelUs = median(kernelTimes);
     return timing;
@@ -131,6 +153,8 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             ResizeGPU gpu(image, width, height, parameters.bilinear);
             return measureGPU(gpu, image, repeats, output);
         }
+        case Algorithm::RegionGrowing:
+            return runRegionGrowingGPU(image, parameters, repeats, output);
     }
     throw std::logic_error("Unknown algorithm");
 }

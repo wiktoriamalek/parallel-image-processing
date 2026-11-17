@@ -5,7 +5,63 @@
 #include <iomanip>
 #include <iostream>
 #include "opencl_utils.hpp"
+#include <random>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 #include <vector>
+
+namespace {
+Image direct(const Image& image, int radius, int minContrast) {
+    Image result = image;
+    bernsenRows(image, result, radius, minContrast, 0, image.height);
+    return result;
+}
+
+Image randomImage(int width, int height, std::mt19937& generator) {
+    Image image{width, height, std::vector<unsigned char>(static_cast<std::size_t>(width) * height)};
+    std::uniform_int_distribution<int> value(0, 255);
+    const int flat = value(generator);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const bool inFlatArea = (x / 5 + y / 7) % 3 == 0;
+            image.pixels[static_cast<std::size_t>(y) * width + x] = static_cast<unsigned char>(inFlatArea ? flat : value(generator));
+        }
+    }
+    return image;
+}
+
+void checkSame(const Image& image, int radius, int minContrast, int threads) {
+    std::ostringstream name;
+    name << image.width << 'x' << image.height << ", radius " << radius << ", contrast " << minContrast;
+    const Image expected = direct(image, radius, minContrast);
+    Image result = image;
+    bernsenThreshold(image, result, radius, minContrast, 1);
+    if (result.pixels != expected.pixels) throw std::runtime_error(name.str() + ": CPU 1 thread differs from the direct version");
+    bernsenThreshold(image, result, radius, minContrast, threads);
+    if (result.pixels != expected.pixels) throw std::runtime_error(name.str() + ": CPU with threads differs from the direct version");
+    BernsenGPU gpu(image, radius, minContrast);
+    Image gpuResult = image;
+    gpu.run(image, gpuResult);
+    if (gpuResult.pixels != expected.pixels) throw std::runtime_error(name.str() + ": GPU differs from the direct version");
+}
+
+void checkRandomImages(int threads) {
+    std::mt19937 generator(2031);
+    for (auto [width, height] : {std::pair{1, 1}, {1, 7}, {7, 1}, {3, 5}, {64, 64}, {300, 129}, {129, 300}}) {
+        const Image image = randomImage(width, height, generator);
+        for (int radius : {0, 1, 2, 7, 20, 50, 200}) {
+            for (int minContrast : {0, 15, 255}) checkSame(image, radius, minContrast, threads);
+        }
+    }
+    for (int level : {0, 100, 255}) {
+        checkSame(Image{40, 30, std::vector<unsigned char>(40 * 30, static_cast<unsigned char>(level))}, 3, 15, threads);
+        checkSame(Image{40, 30, std::vector<unsigned char>(40 * 30, static_cast<unsigned char>(level))}, 3, 0, threads);
+    }
+    std::cout << "CPU 1 thread, CPU " << threads << " threads and GPU match the direct version on random and flat images "
+              << "(radius 0-200, contrast 0-255)\n";
+}
+}
 
 int main(int argc, char* argv[]) {
     try {
@@ -13,6 +69,7 @@ int main(int argc, char* argv[]) {
 
         int radius = parseNumber<int>(options.parameter("--radius", "7"));
         int minContrast = parseNumber<int>(options.parameter("--contrast", "15"));
+        checkRandomImages(options.threads);
 
         Image image = loadImage(options.image);
         Image cpuResult = image;
@@ -37,11 +94,13 @@ int main(int argc, char* argv[]) {
 
         BernsenGPU gpu(image, radius, minContrast);
         Image gpuResult = image;
-        cl_event event = nullptr;
+        cl_event rowEvent = nullptr;
+        cl_event columnEvent = nullptr;
         std::vector<double> kernelTimes;
-        double gpuTotal = measure([&] { gpu.run(image, gpuResult, &event); }, options.repeats, [] {}, [&](int repeat) {
-            double time = kernelTimeUs(event);
-            checkCL(clReleaseEvent(event), "clReleaseEvent");
+        double gpuTotal = measure([&] { gpu.run(image, gpuResult, &rowEvent, &columnEvent); }, options.repeats, [] {}, [&](int repeat) {
+            double time = kernelTimeUs(rowEvent) + kernelTimeUs(columnEvent);
+            checkCL(clReleaseEvent(rowEvent), "clReleaseEvent");
+            checkCL(clReleaseEvent(columnEvent), "clReleaseEvent");
             if (repeat >= 0) kernelTimes.push_back(time);
             if (gpuResult.pixels != cpuResult.pixels) throw std::runtime_error("GPU and CPU local thresholding results differ");
         });

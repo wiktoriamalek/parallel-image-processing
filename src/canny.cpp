@@ -5,5 +5,7 @@
 #include <stdexcept>
 #include "convolution.hpp"
 
-void
-
+Image gauss_function(const Image& image)
+{
+    
+}

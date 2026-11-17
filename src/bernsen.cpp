@@ -11,6 +11,10 @@ constexpr double sauvolaStddevRange = 128.0;
 constexpr int localThresholdGroupWidth = 256;
 constexpr int localThresholdColumnsPerItem = 8;
 constexpr int localThresholdBandHeight = 16;
+constexpr std::size_t bernsenRowOutputs = 2048;
+constexpr std::size_t bernsenTileColumns = 32;
+constexpr std::size_t bernsenTileRows = 64;
+constexpr std::size_t bernsenTileLanes = 8;
 
 template<class Threshold>
 void localThresholdRows(const Image& image, Image& result, int radius, int firstRow, int endRow,
@@ -191,11 +195,139 @@ void bernsenRows(const Image &image, Image &result, int radius, int minContrast,
     }
 }
 
-void bernsenThreshold(const Image &image, Image &result, int radius, int minContrast, int threads) {
-    // we need to divide the rows for threads and for each range call bernsenRows
+namespace {
+struct MinMaxRows {
+    std::vector<unsigned char> low, high;
 
+    void resize(std::size_t size) {
+        low.resize(size);
+        high.resize(size);
+    }
+};
+
+struct BernsenScratch {
+    MinMaxRows padded, prefix, suffix;
+    MinMaxRows current, next, nextPrefix;
+};
+
+void rowMinMax(const unsigned char* row, int width, int radius, unsigned char* minimum, unsigned char* maximum,
+               BernsenScratch& scratch) {
+    const int window = 2 * radius + 1;
+    const int length = width + 2 * radius;
+    scratch.padded.resize(length);
+    scratch.prefix.resize(length);
+    scratch.suffix.resize(length);
+    unsigned char* low = scratch.padded.low.data();
+    unsigned char* high = scratch.padded.high.data();
+    std::fill(low, low + length, 255);
+    std::fill(high, high + length, 0);
+    std::copy(row, row + width, low + radius);
+    std::copy(row, row + width, high + radius);
+    unsigned char* prefixLow = scratch.prefix.low.data();
+    unsigned char* prefixHigh = scratch.prefix.high.data();
+    unsigned char* suffixLow = scratch.suffix.low.data();
+    unsigned char* suffixHigh = scratch.suffix.high.data();
+
+    for (int start = 0; start < length; start += window) {
+        const int stop = std::min(start + window, length);
+        prefixLow[start] = low[start];
+        prefixHigh[start] = high[start];
+        for (int i = start + 1; i < stop; ++i) {
+            prefixLow[i] = std::min(prefixLow[i - 1], low[i]);
+            prefixHigh[i] = std::max(prefixHigh[i - 1], high[i]);
+        }
+        suffixLow[stop - 1] = low[stop - 1];
+        suffixHigh[stop - 1] = high[stop - 1];
+        for (int i = stop - 2; i >= start; --i) {
+            suffixLow[i] = std::min(suffixLow[i + 1], low[i]);
+            suffixHigh[i] = std::max(suffixHigh[i + 1], high[i]);
+        }
+    }
+    for (int x = 0; x < width; ++x) {
+        minimum[x] = std::min(suffixLow[x], prefixLow[x + 2 * radius]);
+        maximum[x] = std::max(suffixHigh[x], prefixHigh[x + 2 * radius]);
+    }
+}
+
+void loadBlock(const Image& image, int radius, int blockStart, MinMaxRows& block, BernsenScratch& scratch) {
+    const int width = image.width;
+    const int window = 2 * radius + 1;
+    block.resize(static_cast<std::size_t>(window) * width);
+    for (int i = 0; i < window; ++i) {
+        const int y = blockStart + i - radius;
+        unsigned char* low = block.low.data() + static_cast<std::size_t>(i) * width;
+        unsigned char* high = block.high.data() + static_cast<std::size_t>(i) * width;
+        if (y < 0 || y >= image.height) {
+            std::fill(low, low + width, 255);
+            std::fill(high, high + width, 0);
+        } else {
+            rowMinMax(&image.pixels[static_cast<std::size_t>(y) * width], width, radius, low, high, scratch);
+        }
+    }
+}
+
+void suffixInPlace(MinMaxRows& block, int window, int width) {
+    for (int i = window - 2; i >= 0; --i) {
+        unsigned char* low = block.low.data() + static_cast<std::size_t>(i) * width;
+        unsigned char* high = block.high.data() + static_cast<std::size_t>(i) * width;
+        for (int x = 0; x < width; ++x) {
+            low[x] = std::min(low[x], low[x + width]);
+            high[x] = std::max(high[x], high[x + width]);
+        }
+    }
+}
+
+void prefixOf(const MinMaxRows& block, MinMaxRows& prefix, int window, int width) {
+    prefix.resize(block.low.size());
+    std::copy(block.low.begin(), block.low.begin() + width, prefix.low.begin());
+    std::copy(block.high.begin(), block.high.begin() + width, prefix.high.begin());
+    for (int i = 1; i < window; ++i) {
+        const std::size_t row = static_cast<std::size_t>(i) * width;
+        for (int x = 0; x < width; ++x) {
+            prefix.low[row + x] = std::min(prefix.low[row - width + x], block.low[row + x]);
+            prefix.high[row + x] = std::max(prefix.high[row - width + x], block.high[row + x]);
+        }
+    }
+}
+
+void bernsenRowRange(const Image& image, Image& result, int radius, int minContrast, int firstRow, int endRow,
+                     BernsenScratch& scratch) {
+    const int width = image.width;
+    const int window = 2 * radius + 1;
+    loadBlock(image, radius, firstRow, scratch.current, scratch);
+    suffixInPlace(scratch.current, window, width);
+    for (int blockStart = firstRow; blockStart < endRow; blockStart += window) {
+        loadBlock(image, radius, blockStart + window, scratch.next, scratch);
+        prefixOf(scratch.next, scratch.nextPrefix, window, width);
+        for (int i = 0; i < window && blockStart + i < endRow; ++i) {
+            const std::size_t row = static_cast<std::size_t>(i) * width;
+            const std::size_t previousRow = static_cast<std::size_t>(std::max(i - 1, 0)) * width;
+            const unsigned char* suffixLow = scratch.current.low.data() + row;
+            const unsigned char* suffixHigh = scratch.current.high.data() + row;
+            const unsigned char* prefixLow = (i == 0 ? scratch.current.low.data() : scratch.nextPrefix.low.data()) + previousRow;
+            const unsigned char* prefixHigh = (i == 0 ? scratch.current.high.data() : scratch.nextPrefix.high.data()) + previousRow;
+            const std::size_t offset = static_cast<std::size_t>(blockStart + i) * width;
+            const unsigned char* pixels = &image.pixels[offset];
+            unsigned char* output = &result.pixels[offset];
+            for (int x = 0; x < width; ++x) {
+                const int Jmin = std::min(suffixLow[x], prefixLow[x]);
+                const int Jmax = std::max(suffixHigh[x], prefixHigh[x]);
+                const int threshold = (Jmax + Jmin) / 2;
+                output[x] = Jmax - Jmin < minContrast || pixels[x] < threshold ? 0 : 255;
+            }
+        }
+        suffixInPlace(scratch.next, window, width);
+        std::swap(scratch.current, scratch.next);
+    }
+}
+}
+
+void bernsenThreshold(const Image &image, Image &result, int radius, int minContrast, int threads) {
+    if (radius < 0) throw std::invalid_argument("Window radius must be non-negative");
+    if (result.pixels.size() != image.pixels.size()) throw std::runtime_error("Output image size does not match the input");
     parallelRanges(image.height, threads, [&](std::size_t begin, std::size_t end, int) {
-        bernsenRows(image, result, radius, minContrast, static_cast<int>(begin), static_cast<int>(end));
+        BernsenScratch scratch;
+        bernsenRowRange(image, result, radius, minContrast, static_cast<int>(begin), static_cast<int>(end), scratch);
     });
 }
 
@@ -203,20 +335,39 @@ BernsenGPU::BernsenGPU(const Image& image, int radius, int minContrast)
     : cl("kernels/bernsen.cl"),
       bufferSize(image.pixels.size()),
       globalWorkSize{static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)} {
+    if (radius < 0) throw std::invalid_argument("Window radius must be non-negative");
     try {
         cl_int error;
         inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
         checkCL(error, "clCreateBuffer");
+        rowMinMaxBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, 2 * bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
         outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, bufferSize, nullptr, &error);
         checkCL(error, "clCreateBuffer");
-        kernel = clCreateKernel(cl.program, "bernsen", &error);
+        cl_ulong localMemory = 0;
+        checkCL(clGetDeviceInfo(cl.device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(localMemory), &localMemory, nullptr), "clGetDeviceInfo");
+        const std::size_t rowBytes = 4 * (bernsenRowOutputs + 2 * static_cast<std::size_t>(radius));
+        const std::size_t columnBytes = 2 * (bernsenTileRows + 2 * static_cast<std::size_t>(radius)) * bernsenTileColumns * 2;
+        rowLocal = rowBytes <= localMemory;
+        columnLocal = columnBytes <= localMemory;
+        rowKernel = clCreateKernel(cl.program, rowLocal ? "bernsenRowMinMaxLocal" : "bernsenRowMinMax", &error);
         checkCL(error, "clCreateKernel");
-        checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
-        checkCL(clSetKernelArg(kernel, 1, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
-        checkCL(clSetKernelArg(kernel, 2, sizeof(image.width), &image.width), "clSetKernelArg");
-        checkCL(clSetKernelArg(kernel, 3, sizeof(image.height), &image.height), "clSetKernelArg");
-        checkCL(clSetKernelArg(kernel, 4, sizeof(radius), &radius), "clSetKernelArg");
-        checkCL(clSetKernelArg(kernel, 5, sizeof(minContrast), &minContrast), "clSetKernelArg");
+        columnKernel = clCreateKernel(cl.program, columnLocal ? "bernsenColumnsLocal" : "bernsenColumns", &error);
+        checkCL(error, "clCreateKernel");
+        if (rowLocal) checkCL(clSetKernelArg(rowKernel, 5, rowBytes, nullptr), "clSetKernelArg");
+        if (columnLocal) checkCL(clSetKernelArg(columnKernel, 7, columnBytes, nullptr), "clSetKernelArg");
+        checkCL(clSetKernelArg(rowKernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(rowKernel, 1, sizeof(rowMinMaxBuffer), &rowMinMaxBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(rowKernel, 2, sizeof(image.width), &image.width), "clSetKernelArg");
+        checkCL(clSetKernelArg(rowKernel, 3, sizeof(image.height), &image.height), "clSetKernelArg");
+        checkCL(clSetKernelArg(rowKernel, 4, sizeof(radius), &radius), "clSetKernelArg");
+        checkCL(clSetKernelArg(columnKernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(columnKernel, 1, sizeof(rowMinMaxBuffer), &rowMinMaxBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(columnKernel, 2, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(columnKernel, 3, sizeof(image.width), &image.width), "clSetKernelArg");
+        checkCL(clSetKernelArg(columnKernel, 4, sizeof(image.height), &image.height), "clSetKernelArg");
+        checkCL(clSetKernelArg(columnKernel, 5, sizeof(radius), &radius), "clSetKernelArg");
+        checkCL(clSetKernelArg(columnKernel, 6, sizeof(minContrast), &minContrast), "clSetKernelArg");
     } catch (...) {
         release();
         throw;
@@ -224,8 +375,10 @@ BernsenGPU::BernsenGPU(const Image& image, int radius, int minContrast)
 }
 
 void BernsenGPU::release() {
-    if (kernel) clReleaseKernel(kernel);
+    if (rowKernel) clReleaseKernel(rowKernel);
+    if (columnKernel) clReleaseKernel(columnKernel);
     if (inputBuffer) clReleaseMemObject(inputBuffer);
+    if (rowMinMaxBuffer) clReleaseMemObject(rowMinMaxBuffer);
     if (outputBuffer) clReleaseMemObject(outputBuffer);
 }
 
@@ -233,13 +386,20 @@ BernsenGPU::~BernsenGPU() {
     release();
 }
 
-void BernsenGPU::run(const Image& image, Image& output, cl_event* kernelEvent) {
+void BernsenGPU::run(const Image& image, Image& output, cl_event* rowEvent, cl_event* columnEvent) {
     if (static_cast<std::size_t>(image.width) != globalWorkSize[0] || static_cast<std::size_t>(image.height) != globalWorkSize[1] ||
         image.pixels.size() != bufferSize || output.pixels.size() != bufferSize) {
         throw std::runtime_error("Image dimensions do not match the GPU buffers");
     }
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
-    checkCL(clFinish(cl.queue), "clFinish");
+    const std::size_t rowGlobal[2] = {(globalWorkSize[0] + bernsenRowOutputs - 1) / bernsenRowOutputs * 256, globalWorkSize[1]};
+    const std::size_t rowGroup[2] = {256, 1};
+    const std::size_t columnGlobal[2] = {(globalWorkSize[0] + bernsenTileColumns - 1) / bernsenTileColumns * bernsenTileColumns,
+                                         (globalWorkSize[1] + bernsenTileRows - 1) / bernsenTileRows * bernsenTileLanes};
+    const std::size_t columnGroup[2] = {bernsenTileColumns, bernsenTileLanes};
+    checkCL(clEnqueueNDRangeKernel(cl.queue, rowKernel, 2, nullptr, rowLocal ? rowGlobal : globalWorkSize,
+                                   rowLocal ? rowGroup : nullptr, 0, nullptr, rowEvent), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, columnKernel, 2, nullptr, columnLocal ? columnGlobal : globalWorkSize,
+                                   columnLocal ? columnGroup : nullptr, 0, nullptr, columnEvent), "clEnqueueNDRangeKernel");
     checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
 }

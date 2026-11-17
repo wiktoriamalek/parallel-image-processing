@@ -37,14 +37,18 @@ public:
     ~BernsenGPU();
     BernsenGPU(const BernsenGPU&) = delete;
     BernsenGPU& operator=(const BernsenGPU&) = delete;
-    void run(const Image& image, Image& output, cl_event* kernelEvent = nullptr);
+    void run(const Image& image, Image& output, cl_event* rowEvent = nullptr, cl_event* columnEvent = nullptr);
 
 private:
     void release();
     OpenCL cl;
-    cl_kernel kernel = nullptr;
+    cl_kernel rowKernel = nullptr;
+    cl_kernel columnKernel = nullptr;
     cl_mem inputBuffer = nullptr;
+    cl_mem rowMinMaxBuffer = nullptr;
     cl_mem outputBuffer = nullptr;
     std::size_t bufferSize;
     std::size_t globalWorkSize[2];
+    bool rowLocal = false;
+    bool columnLocal = false;
 };

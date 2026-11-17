@@ -154,6 +154,22 @@ Timing runMultiOtsuGPU(const Image& image, const Parameters& parameters, bool ze
     return timing;
 }
 
+Timing runBernsenGPU(const Image& image, const Parameters& parameters, int repeats, Image& output) {
+    BernsenGPU gpu(image, parameters.radius, parameters.minContrast);
+    Timing timing;
+    std::vector<double> kernelTimes;
+    cl_event rowEvent = nullptr;
+    cl_event columnEvent = nullptr;
+    timing.totalUs = measure([&] { gpu.run(image, output, &rowEvent, &columnEvent); }, repeats, [] {}, [&](int repeat) {
+        double time = kernelTimeUs(rowEvent) + kernelTimeUs(columnEvent);
+        checkCL(clReleaseEvent(rowEvent), "clReleaseEvent");
+        checkCL(clReleaseEvent(columnEvent), "clReleaseEvent");
+        if (repeat >= 0) kernelTimes.push_back(time);
+    });
+    timing.kernelUs = median(kernelTimes);
+    return timing;
+}
+
 Timing runPeaksValleysGPU(const Image& image, const Parameters& parameters, bool zeroCopy, int repeats, Image& output) {
     Peaks_valleys_detectionGPU gpu(image, parameters.maxClasses, zeroCopy);
     Timing timing;
@@ -210,10 +226,8 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return runMultiOtsuGPU(image, parameters, zeroCopy, repeats, output);
         case Algorithm::PeaksValleys:
             return runPeaksValleysGPU(image, parameters, zeroCopy, repeats, output);
-        case Algorithm::Bernsen: {
-            BernsenGPU gpu(image, parameters.radius, parameters.minContrast);
-            return measureGPU(gpu, image, repeats, output);
-        }
+        case Algorithm::Bernsen:
+            return runBernsenGPU(image, parameters, repeats, output);
         case Algorithm::Niblack: {
             LocalThresholdGPU gpu(image, LocalThresholdMethod::Niblack, parameters.radius, parameters.localThresholdK);
             return measureGPU(gpu, image, repeats, output);

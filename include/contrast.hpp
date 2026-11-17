@@ -3,13 +3,13 @@
 #include "opencl_utils.hpp"
 #include <cstddef>
 
-Image contrast(const Image& image);
-void contrastRange(const Image& image, Image& output, std::size_t begin, std::size_t end);
-void contrastParallel(const Image& image, Image& output, int threads);
+Image contrast(const Image& image, float factor = 2.0f);
+void contrastRange(const Image& image, Image& output, std::size_t begin, std::size_t end, float factor = 2.0f);
+void contrastParallel(const Image& image, Image& output, int threads, float factor = 2.0f);
 
 class ContrastGPU {
 public:
-    explicit ContrastGPU(const Image& image);
+    explicit ContrastGPU(const Image& image, float factor = 2.0f);
     ~ContrastGPU();
     ContrastGPU(const ContrastGPU&) = delete;
     ContrastGPU& operator=(const ContrastGPU&) = delete;

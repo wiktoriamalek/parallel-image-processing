@@ -63,6 +63,7 @@ private:
     QComboBox* algorithmBox;
     QStackedWidget* parameterPages;
     QSpinBox* thresholdSpin;
+    QDoubleSpinBox* contrastFactorSpin;
     QSpinBox* classesSpin;
     QCheckBox* zeroCopyCheck;
     QSpinBox* radiusSpin;

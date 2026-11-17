@@ -28,7 +28,7 @@
 #include <utility>
 
 namespace {
-const char* algorithmNames[] = {"Progowanie", "Negatyw", "Otsu", "Multi-Otsu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
+const char* algorithmNames[] = {"Progowanie", "Negatyw", "Kontrast", "Otsu", "Multi-Otsu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
                                 "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru"};
 
 QImage toQImage(const Image& image) {
@@ -122,6 +122,11 @@ QWidget* MainWindow::createControls() {
     thresholdSpin = new QSpinBox;
     thresholdSpin->setRange(0, 255);
     thresholdSpin->setValue(defaults.threshold);
+    contrastFactorSpin = new QDoubleSpinBox;
+    contrastFactorSpin->setRange(-5.0, 5.0);
+    contrastFactorSpin->setDecimals(2);
+    contrastFactorSpin->setSingleStep(0.1);
+    contrastFactorSpin->setValue(defaults.contrastFactor);
     classesSpin = new QSpinBox;
     classesSpin->setRange(2, 16);
     classesSpin->setValue(defaults.classes);
@@ -191,6 +196,9 @@ QWidget* MainWindow::createControls() {
     parameterPages = new QStackedWidget;
     parameterPages->addWidget(parameterPage({{"Próg", thresholdSpin}}));
     parameterPages->addWidget(parameterPage({{"", note("Każdy piksel p zamienia się na 255 − p, bez parametrów.")}}));
+    parameterPages->addWidget(parameterPage({{"Współczynnik k", contrastFactorSpin},
+        {"", note("Każdy piksel p zamienia się na (p − 128)·k + 128, obcięte do 0…255. "
+                  "k > 1 zwiększa kontrast, k < 1 go zmniejsza, k < 0 odwraca jasność.")}}));
     parameterPages->addWidget(parameterPage({{"", note("Próg jest wyznaczany z histogramu, bez parametrów.")}}));
     parameterPages->addWidget(parameterPage({{"Liczba klas", classesSpin}, {"", zeroCopyCheck},
         {"", note("K klas to K − 1 progów wyznaczanych z histogramu.")}}));
@@ -392,6 +400,7 @@ Algorithm MainWindow::currentAlgorithm() const {
 Parameters MainWindow::currentParameters() const {
     Parameters parameters;
     parameters.threshold = thresholdSpin->value();
+    parameters.contrastFactor = static_cast<float>(contrastFactorSpin->value());
     parameters.classes = classesSpin->value();
     parameters.zeroCopy = zeroCopyCheck->isChecked();
     parameters.radius = radiusSpin->value();

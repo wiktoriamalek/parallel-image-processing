@@ -1,6 +1,7 @@
 #include "algorithms.hpp"
 #include "bernsen.hpp"
 #include "common_benchmarking.hpp"
+#include "contrast.hpp"
 #include "convolution.hpp"
 #include "distortion.hpp"
 #include "median_filter.hpp"
@@ -43,6 +44,8 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
                             [&] { output = image; }, [](int) {})};
         case Algorithm::Negative:
             return {measure([&] { negativeParallel(image, output, threads); }, repeats)};
+        case Algorithm::Contrast:
+            return {measure([&] { contrastParallel(image, output, threads, parameters.contrastFactor); }, repeats)};
         case Algorithm::Otsu:
             return {measure([&] { output = otsuSegmentation(image, threads); }, repeats)};
         case Algorithm::MultiOtsu:
@@ -151,6 +154,10 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
         }
         case Algorithm::Negative: {
             NegativeGPU gpu(image);
+            return measureGPU(gpu, image, repeats, output);
+        }
+        case Algorithm::Contrast: {
+            ContrastGPU gpu(image, parameters.contrastFactor);
             return measureGPU(gpu, image, repeats, output);
         }
         case Algorithm::Otsu:

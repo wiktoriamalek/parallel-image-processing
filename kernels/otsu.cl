@@ -101,5 +101,119 @@ __kernel void otsuThresholdKernel(__global const unsigned int* histogram, __glob
     threshold[0] = bestThreshold;
 
     }
+}
 
+__kernel void multiOtsuApplyLookupKernel(__global const uchar* input, __global uchar* output, int pixelCount, __global const uchar* lookup)
+{
+    const size_t i = get_global_id(0);
+    if (i >= (size_t)pixelCount) {
+        return;
+    }
+
+    output[i] = lookup[input[i]];
+}
+
+float multiOtsuGain(ulong count, long centeredSum, float totalPixels)
+{
+    if (count == 0) {
+        return -INFINITY;
+    }
+    const float deviation = (float)centeredSum / (float)count;
+    return (float)count / totalPixels * deviation * deviation;
+}
+
+__kernel void multiOtsuPrefixKernel(__global const unsigned int* histogram, __global ulong* prefixCount,
+                                    __global long* prefixCenteredSum, __global float* layers)
+{
+    __local unsigned int localHistogram[256];
+    __local ulong totals[2];
+    const int id = get_local_id(0);
+    const int end = id + 1;
+    localHistogram[id] = histogram[id];
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    ulong count = 0;
+    ulong sum = 0;
+    for (int i = 0; i < end; i++) {
+        count += localHistogram[i];
+        sum += (ulong)i * localHistogram[i];
+    }
+    if (end == 256) {
+        totals[0] = count;
+        totals[1] = sum;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    const ulong totalCount = totals[0];
+    const ulong center = (totals[1] + totalCount / 2) / totalCount;
+    const long centeredSum = (long)sum - (long)(center * count);
+    prefixCount[end] = count;
+    prefixCenteredSum[end] = centeredSum;
+    layers[end] = multiOtsuGain(count, centeredSum, (float)totalCount);
+    if (id == 0) {
+        prefixCount[0] = 0;
+        prefixCenteredSum[0] = 0;
+        layers[0] = -INFINITY;
+    }
+}
+
+__kernel void multiOtsuLayerKernel(__global const ulong* prefixCount, __global const long* prefixCenteredSum,
+                                   __global float* layers, __global ushort* split, int k, int firstEnd)
+{
+    __local float values[256];
+    __local int begins[256];
+    const int begin = get_local_id(0);
+    const int end = firstEnd + get_group_id(0);
+    __global const float* previous = layers + (k - 2) * 257;
+
+    float value = -INFINITY;
+    if (begin >= k - 1 && begin < end) {
+        value = previous[begin] + multiOtsuGain(prefixCount[end] - prefixCount[begin],
+                                                prefixCenteredSum[end] - prefixCenteredSum[begin],
+                                                (float)prefixCount[256]);
+    }
+    values[begin] = value;
+    begins[begin] = begin;
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for (int stride = 128; stride > 0; stride /= 2) {
+        if (begin < stride) {
+            const float other = values[begin + stride];
+            const int otherBegin = begins[begin + stride];
+            if (other > values[begin] || (other == values[begin] && otherBegin < begins[begin])) {
+                values[begin] = other;
+                begins[begin] = otherBegin;
+            }
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if (begin == 0) {
+        layers[(k - 1) * 257 + end] = values[0];
+        split[(k - 2) * 256 + end - 1] = (ushort)begins[0];
+    }
+}
+
+__kernel void multiOtsuLookupTableKernel(__global const float* layers, __global const ushort* split, int classes,
+                                         __global int* thresholds, __global uchar* lookup)
+{
+    __local int localThresholds[255];
+    const int id = get_local_id(0);
+    if (id == 0) {
+        const int valid = layers[(classes - 1) * 257 + 256] != -INFINITY;
+        int last = 256;
+        for (int k = classes; k >= 2; k--) {
+            const int begin = valid ? split[(k - 2) * 256 + last - 1] : 0;
+            localThresholds[k - 2] = begin - 1;
+            thresholds[k - 2] = begin - 1;
+            last = begin;
+        }
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    int k = 0;
+    while (k < classes - 1 && id > localThresholds[k]) {
+        k++;
+    }
+    lookup[id] = (uchar)(255 * k / (classes - 1));
 }

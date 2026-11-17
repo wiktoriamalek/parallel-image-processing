@@ -125,6 +125,8 @@ QWidget* MainWindow::createControls() {
     classesSpin = new QSpinBox;
     classesSpin->setRange(2, 16);
     classesSpin->setValue(defaults.classes);
+    zeroCopyCheck = new QCheckBox("GPU: zero-copy (pamięć wspólna z CPU)");
+    zeroCopyCheck->setChecked(defaults.zeroCopy);
     radiusSpin = new QSpinBox;
     radiusSpin->setRange(1, 50);
     radiusSpin->setValue(defaults.radius);
@@ -167,7 +169,7 @@ QWidget* MainWindow::createControls() {
     parameterPages = new QStackedWidget;
     parameterPages->addWidget(parameterPage({{"Próg", thresholdSpin}}));
     parameterPages->addWidget(parameterPage({{"", note("Próg jest wyznaczany z histogramu, bez parametrów.")}}));
-    parameterPages->addWidget(parameterPage({{"Liczba klas", classesSpin},
+    parameterPages->addWidget(parameterPage({{"Liczba klas", classesSpin}, {"", zeroCopyCheck},
         {"", note("K klas to K − 1 progów wyznaczanych z histogramu.")}}));
     parameterPages->addWidget(parameterPage({{"Promień okna", radiusSpin}, {"Minimalny kontrast", contrastSpin}}));
     parameterPages->addWidget(parameterPage({{"Filtr", filterBox}}));
@@ -366,6 +368,7 @@ Parameters MainWindow::currentParameters() const {
     Parameters parameters;
     parameters.threshold = thresholdSpin->value();
     parameters.classes = classesSpin->value();
+    parameters.zeroCopy = zeroCopyCheck->isChecked();
     parameters.radius = radiusSpin->value();
     parameters.minContrast = contrastSpin->value();
     parameters.filter = filterBox->currentIndex();

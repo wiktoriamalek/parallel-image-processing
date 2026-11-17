@@ -108,6 +108,30 @@ Timing runOtsuGPU(const Image& image, int repeats, Image& output) {
     return timing;
 }
 
+Timing runMultiOtsuGPU(const Image& image, const Parameters& parameters, int repeats, Image& output) {
+    MultiOtsuGPU gpu(image, parameters.classes, parameters.zeroCopy);
+    Timing timing;
+    std::vector<double> kernelTimes;
+    cl_event histogramEvent = nullptr;
+    std::vector<cl_event> thresholdsEvents;
+    cl_event lookupEvent = nullptr;
+    timing.totalUs = measure([&] {
+        gpu.run(image, output, &histogramEvent, &thresholdsEvents, &lookupEvent);
+    }, repeats, [] {}, [&](int repeat) {
+        double time = kernelTimeUs(histogramEvent) + kernelTimeUs(lookupEvent);
+        checkCL(clReleaseEvent(histogramEvent), "clReleaseEvent");
+        checkCL(clReleaseEvent(lookupEvent), "clReleaseEvent");
+        for (cl_event event : thresholdsEvents) {
+            time += kernelTimeUs(event);
+            checkCL(clReleaseEvent(event), "clReleaseEvent");
+        }
+        thresholdsEvents.clear();
+        if (repeat >= 0) kernelTimes.push_back(time);
+    });
+    timing.kernelUs = median(kernelTimes);
+    return timing;
+}
+
 Timing runRegionGrowingGPU(const Image& image, const Parameters& parameters, int repeats, Image& output) {
     RegionGrowingGPU gpu(image, parameters.seedX, parameters.seedY, parameters.tolerance, parameters.localTiles);
     Timing timing;
@@ -130,7 +154,7 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
         case Algorithm::Otsu:
             return runOtsuGPU(image, repeats, output);
         case Algorithm::MultiOtsu:
-            throw std::runtime_error("Multi-Otsu nie ma jeszcze wersji GPU, odznacz tryb GPU");
+            return runMultiOtsuGPU(image, parameters, repeats, output);
         case Algorithm::Bernsen: {
             BernsenGPU gpu(image, parameters.radius, parameters.minContrast);
             return measureGPU(gpu, image, repeats, output);

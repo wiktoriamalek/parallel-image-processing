@@ -225,6 +225,122 @@ Image classifyDirectly(const Image& image, const std::vector<int>& thresholds) {
     }
     return result;
 }
+
+long long differentPixels(const Image& reference, const Image& image) {
+    long long different = 0;
+    for (std::size_t i = 0; i < reference.pixels.size(); ++i) different += reference.pixels[i] != image.pixels[i];
+    return different;
+}
+
+void checkGPUThresholds(const Image& image, MultiOtsuGPU& gpu, int classes, const std::string& name) {
+    const Histogram histogram = calculateHistogram(image);
+    int distinct = 0;
+    for (std::size_t count : histogram) distinct += count > 0;
+    Image output = image;
+    if (distinct < classes) {
+        try {
+            gpu.run(image, output);
+        } catch (const std::invalid_argument&) {
+            return;
+        }
+        throw std::runtime_error(name + ": GPU accepted too many classes for the histogram");
+    }
+    gpu.run(image, output);
+    const Cumulative cumulative(histogram);
+    const double value = cumulative.betweenClassVariance(gpu.thresholds());
+    const std::vector<int> optimal = calculateMultiOtsuThresholds(histogram, classes);
+    const double best = cumulative.betweenClassVariance(optimal);
+    if (value < best * (1.0 - 1e-5)) {
+        std::ostringstream message;
+        message << std::setprecision(12) << name << ", " << classes << " classes: GPU thresholds " << join(gpu.thresholds())
+                << " (variance " << value << ") are far from the optimal " << join(optimal) << " (variance " << best << ")";
+        throw std::runtime_error(message.str());
+    }
+    if (output.pixels != classifyDirectly(image, gpu.thresholds()).pixels) {
+        throw std::runtime_error(name + ": GPU segmentation does not match its own thresholds");
+    }
+}
+
+void checkGPURandomImages() {
+    std::mt19937 generator(2027);
+    std::vector<Image> images;
+    for (int test = 0; test < 100; ++test) {
+        Image image{64, 64, std::vector<unsigned char>(64 * 64)};
+        if (test < 50) {
+            std::vector<int> levels(1 + test % 12);
+            std::uniform_int_distribution<int> level(0, 255);
+            for (int& value : levels) value = level(generator);
+            std::uniform_int_distribution<std::size_t> pick(0, levels.size() - 1);
+            for (auto& pixel : image.pixels) pixel = static_cast<unsigned char>(levels[pick(generator)]);
+        } else {
+            std::uniform_real_distribution<double> mean(0.0, 255.0);
+            std::uniform_real_distribution<double> width(2.0, 40.0);
+            std::vector<std::normal_distribution<double>> peaks;
+            for (int peak = 1 + test % 6; peak > 0; --peak) peaks.emplace_back(mean(generator), width(generator));
+            std::uniform_int_distribution<std::size_t> pick(0, peaks.size() - 1);
+            for (auto& pixel : image.pixels) {
+                pixel = static_cast<unsigned char>(std::clamp(std::lround(peaks[pick(generator)](generator)), 0L, 255L));
+            }
+        }
+        images.push_back(std::move(image));
+    }
+    for (bool zeroCopy : {false, true}) {
+        for (int classes : {2, 3, 4, 5, 6, 7, 8, 12, 16}) {
+            MultiOtsuGPU gpu(images.front(), classes, zeroCopy);
+            for (std::size_t test = 0; test < images.size(); ++test) {
+                checkGPUThresholds(images[test], gpu, classes, "random GPU image " + std::to_string(test));
+            }
+        }
+    }
+}
+
+double takeKernelTime(cl_event& event) {
+    const double time = kernelTimeUs(event);
+    checkCL(clReleaseEvent(event), "clReleaseEvent");
+    event = nullptr;
+    return time;
+}
+
+struct GPUResult {
+    double totalUs = 0.0;
+    double kernelUs = 0.0;
+    double noCopyUs = 0.0;
+    std::vector<int> thresholds;
+    long long differentPixels = 0;
+    Image output;
+};
+
+GPUResult measureGPU(const Image& image, int classes, bool zeroCopy, int repeats, const Image& reference) {
+    MultiOtsuGPU gpu(image, classes, zeroCopy);
+    Image output = image;
+    Image first;
+    cl_event histogramEvent = nullptr;
+    std::vector<cl_event> thresholdsEvents;
+    cl_event lookupEvent = nullptr;
+    std::vector<double> kernelTimes;
+    GPUResult result;
+    result.totalUs = measure([&] { gpu.run(image, output, &histogramEvent, &thresholdsEvents, &lookupEvent); },
+                             repeats, [] {}, [&](int repeat) {
+        double time = takeKernelTime(histogramEvent) + takeKernelTime(lookupEvent);
+        for (cl_event& event : thresholdsEvents) time += takeKernelTime(event);
+        thresholdsEvents.clear();
+        if (repeat >= 0) kernelTimes.push_back(time);
+        if (first.pixels.empty()) first = output;
+        if (output.pixels != first.pixels) throw std::runtime_error("GPU multi-Otsu results differ between runs");
+    });
+    result.kernelUs = median(kernelTimes);
+    result.thresholds = gpu.thresholds();
+    result.differentPixels = differentPixels(reference, output);
+
+    result.output = output;
+
+    std::fill(output.pixels.begin(), output.pixels.end(), 1);
+    gpu.upload(image, output);
+    result.noCopyUs = measure([&] { gpu.compute(); gpu.finish(); }, repeats);
+    gpu.download(output);
+    if (output.pixels != result.output.pixels) throw std::runtime_error("GPU multi-Otsu without copying differs");
+    return result;
+}
 }
 
 int main(int argc, char* argv[]) {
@@ -259,6 +375,18 @@ int main(int argc, char* argv[]) {
         double search = measure([&] { searched = calculateMultiOtsuThresholds(histogram, classes); }, options.repeats);
         if (searched != thresholds) throw std::runtime_error("Threshold search is not repeatable");
 
+        checkGPURandomImages();
+        {
+            MultiOtsuGPU gpu(image, classes);
+            checkGPUThresholds(image, gpu, classes, "image");
+        }
+        GPUResult zeroCopy = measureGPU(image, classes, true, options.repeats, expected);
+        std::cout << "GPU thresholds verified as near-optimal on the image and 100 random images (2-16 classes)\n";
+        GPUResult gpu = measureGPU(image, classes, false, options.repeats, expected);
+        if (zeroCopy.thresholds != gpu.thresholds || zeroCopy.output.pixels != gpu.output.pixels) {
+            throw std::runtime_error("GPU multi-Otsu with and without zero-copy differs");
+        }
+
         std::filesystem::path outputDirectory = "results/multi_otsu";
         std::filesystem::create_directories(outputDirectory);
         std::string imageName = std::filesystem::path(options.image).stem().string();
@@ -268,11 +396,16 @@ int main(int argc, char* argv[]) {
         row << std::setprecision(12) << std::quoted(options.image, '"', '"') << ','
             << image.width << ',' << image.height << ',' << classes << ',' << std::quoted(join(thresholds), '"', '"') << ','
             << options.threads << ',' << options.repeats << ','
-            << cpu1 << ',' << cpuN << ',' << overheadN << ',' << search;
-        appendCsv(options.output, "image,width,height,classes,thresholds,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,threshold_search_us", row.str());
-        std::cout << "Thresholds: " << join(thresholds) << '\n';
+            << cpu1 << ',' << cpuN << ',' << overheadN << ',' << search << ','
+            << std::quoted(join(gpu.thresholds), '"', '"') << ',' << gpu.differentPixels << ','
+            << gpu.kernelUs << ',' << gpu.totalUs << ',' << gpu.noCopyUs << ',' << zeroCopy.totalUs;
+        appendCsv(options.output, "image,width,height,classes,thresholds,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,threshold_search_us,gpu_thresholds,gpu_different_pixels,gpu_kernel_us,gpu_total_us,gpu_no_copy_us,gpu_zero_copy_us", row.str());
+        std::cout << "Thresholds CPU / GPU: " << join(thresholds) << " / " << join(gpu.thresholds)
+                  << " (" << gpu.differentPixels << " different pixels)\n";
         std::cout << "Median CPU1 / CPU" << options.threads << " / threshold search only [us]: "
                   << cpu1 << " / " << cpuN << " / " << search << '\n';
+        std::cout << "Median GPU total / GPU zero-copy / GPU without copying / GPU kernels [us]: "
+                  << gpu.totalUs << " / " << zeroCopy.totalUs << " / " << gpu.noCopyUs << " / " << gpu.kernelUs << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

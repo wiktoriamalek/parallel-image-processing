@@ -41,3 +41,48 @@ private:
     cl_mem thresholdBuffer = nullptr;
     std::size_t pixelCount;
 };
+
+class MultiOtsuGPU {
+public:
+    MultiOtsuGPU(const Image& image, int classes, bool zeroCopy = true);
+    ~MultiOtsuGPU();
+    MultiOtsuGPU(const MultiOtsuGPU&) = delete;
+    MultiOtsuGPU& operator=(const MultiOtsuGPU&) = delete;
+    void run(const Image& image, Image& output, cl_event* histogramEvent = nullptr,
+             std::vector<cl_event>* thresholdsEvents = nullptr, cl_event* lookupEvent = nullptr);
+    void upload(const Image& image, Image& output);
+    void compute(cl_event* histogramEvent = nullptr, std::vector<cl_event>* thresholdsEvents = nullptr,
+                 cl_event* lookupEvent = nullptr);
+    void finish();
+    void download(Image& output);
+    const std::vector<int>& thresholds() const { return thresholdValues; }
+
+private:
+    void release();
+    void setImageArguments();
+    void bindImages(const Image& image, Image& output);
+    OpenCL cl;
+    int classes;
+    bool zeroCopy;
+    cl_kernel clearHistogramKernel = nullptr;
+    cl_kernel histogramKernel = nullptr;
+    cl_kernel prefixKernel = nullptr;
+    cl_kernel layerKernel = nullptr;
+    cl_kernel lookupTableKernel = nullptr;
+    cl_kernel lookupKernel = nullptr;
+    cl_mem inputBuffer = nullptr;
+    cl_mem histogramBuffer = nullptr;
+    cl_mem prefixCountBuffer = nullptr;
+    cl_mem prefixSumBuffer = nullptr;
+    cl_mem layersBuffer = nullptr;
+    cl_mem splitBuffer = nullptr;
+    cl_mem thresholdsBuffer = nullptr;
+    cl_mem lookupBuffer = nullptr;
+    cl_mem outputBuffer = nullptr;
+    std::size_t pixelCount;
+    unsigned char* boundInput = nullptr;
+    unsigned char* boundOutput = nullptr;
+    std::vector<int> thresholdValues;
+};
+
+Image multiOtsuSegmentationGPU(const Image& image, int classes, bool zeroCopy = true);

@@ -9,6 +9,7 @@ enum class Mode { CPU1, CPUN, GPU };
 struct Parameters {
     int threshold = 128;
     int classes = 3;
+    bool zeroCopy = true;
     int radius = 7;
     int minContrast = 15;
     int filter = 0;

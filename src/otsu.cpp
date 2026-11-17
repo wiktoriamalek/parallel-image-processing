@@ -2,6 +2,8 @@
 #include "parallel_utils.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
 #include <vector>
@@ -269,6 +271,204 @@ void OtsuGPU::download(Image& output) {
 Image otsuSegmentationGPU(const Image& image) {
     Image result = image;
     OtsuGPU gpu(image);
+    gpu.run(image, result);
+    return result;
+}
+
+MultiOtsuGPU::MultiOtsuGPU(const Image& image, int classes, bool zeroCopy)
+    : cl("kernels/otsu.cl"), classes(classes), zeroCopy(zeroCopy), pixelCount(image.pixels.size()) {
+    if (classes < 2 || classes > 256) throw std::invalid_argument("Multi-Otsu needs between 2 and 256 classes");
+    thresholdValues.assign(classes - 1, 0);
+    try {
+        cl_int error;
+        if (!zeroCopy) {
+            inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, pixelCount, nullptr, &error);
+            checkCL(error, "clCreateBuffer");
+            outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, pixelCount, nullptr, &error);
+            checkCL(error, "clCreateBuffer");
+        }
+        histogramBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, 256 * sizeof(cl_uint), nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        prefixCountBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, 257 * sizeof(cl_ulong), nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        prefixSumBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, 257 * sizeof(cl_long), nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        layersBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, classes * 257 * sizeof(cl_float), nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        splitBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, (classes - 1) * 256 * sizeof(cl_ushort), nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        const std::size_t thresholdsSize = thresholdValues.size() * sizeof(cl_int);
+        if (zeroCopy) {
+            thresholdsBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY | CL_MEM_USE_HOST_PTR, thresholdsSize, thresholdValues.data(), &error);
+        } else {
+            thresholdsBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, thresholdsSize, nullptr, &error);
+        }
+        checkCL(error, "clCreateBuffer");
+        lookupBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, 256, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        clearHistogramKernel = clCreateKernel(cl.program, "clearHistogramKernel", &error);
+        checkCL(error, "clCreateKernel");
+        histogramKernel = clCreateKernel(cl.program, "histogramLocalKernel", &error);
+        checkCL(error, "clCreateKernel");
+        prefixKernel = clCreateKernel(cl.program, "multiOtsuPrefixKernel", &error);
+        checkCL(error, "clCreateKernel");
+        layerKernel = clCreateKernel(cl.program, "multiOtsuLayerKernel", &error);
+        checkCL(error, "clCreateKernel");
+        lookupTableKernel = clCreateKernel(cl.program, "multiOtsuLookupTableKernel", &error);
+        checkCL(error, "clCreateKernel");
+        lookupKernel = clCreateKernel(cl.program, "multiOtsuApplyLookupKernel", &error);
+        checkCL(error, "clCreateKernel");
+
+        int Npixels = static_cast<int>(pixelCount);
+        checkCL(clSetKernelArg(clearHistogramKernel, 0, sizeof(cl_mem), &histogramBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(histogramKernel, 1, sizeof(cl_mem), &histogramBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(histogramKernel, 2, sizeof(int), &Npixels), "clSetKernelArg");
+        checkCL(clSetKernelArg(prefixKernel, 0, sizeof(cl_mem), &histogramBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(prefixKernel, 1, sizeof(cl_mem), &prefixCountBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(prefixKernel, 2, sizeof(cl_mem), &prefixSumBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(prefixKernel, 3, sizeof(cl_mem), &layersBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(layerKernel, 0, sizeof(cl_mem), &prefixCountBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(layerKernel, 1, sizeof(cl_mem), &prefixSumBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(layerKernel, 2, sizeof(cl_mem), &layersBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(layerKernel, 3, sizeof(cl_mem), &splitBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(lookupTableKernel, 0, sizeof(cl_mem), &layersBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(lookupTableKernel, 1, sizeof(cl_mem), &splitBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(lookupTableKernel, 2, sizeof(int), &classes), "clSetKernelArg");
+        checkCL(clSetKernelArg(lookupTableKernel, 3, sizeof(cl_mem), &thresholdsBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(lookupTableKernel, 4, sizeof(cl_mem), &lookupBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(lookupKernel, 2, sizeof(int), &Npixels), "clSetKernelArg");
+        checkCL(clSetKernelArg(lookupKernel, 3, sizeof(cl_mem), &lookupBuffer), "clSetKernelArg");
+        if (!zeroCopy) setImageArguments();
+    } catch (...) {
+        release();
+        throw;
+    }
+}
+
+void MultiOtsuGPU::release() {
+    for (cl_kernel kernel : {clearHistogramKernel, histogramKernel, prefixKernel, layerKernel, lookupTableKernel, lookupKernel}) {
+        if (kernel) clReleaseKernel(kernel);
+    }
+    for (cl_mem buffer : {inputBuffer, histogramBuffer, prefixCountBuffer, prefixSumBuffer, layersBuffer, splitBuffer,
+                          thresholdsBuffer, lookupBuffer, outputBuffer}) {
+        if (buffer) clReleaseMemObject(buffer);
+    }
+}
+
+MultiOtsuGPU::~MultiOtsuGPU() {
+    release();
+}
+
+void MultiOtsuGPU::setImageArguments() {
+    checkCL(clSetKernelArg(histogramKernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
+    checkCL(clSetKernelArg(lookupKernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
+    checkCL(clSetKernelArg(lookupKernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
+}
+
+void MultiOtsuGPU::bindImages(const Image& image, Image& output) {
+    if (image.pixels.data() == output.pixels.data()) {
+        throw std::invalid_argument("Zero-copy needs separate input and output images");
+    }
+    auto* input = const_cast<unsigned char*>(image.pixels.data());
+    if (input == boundInput && output.pixels.data() == boundOutput) return;
+    cl_int error;
+    if (input != boundInput) {
+        if (inputBuffer) clReleaseMemObject(inputBuffer);
+        inputBuffer = nullptr;
+        boundInput = nullptr;
+        inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, pixelCount, input, &error);
+        checkCL(error, "clCreateBuffer");
+        boundInput = input;
+    }
+    if (output.pixels.data() != boundOutput) {
+        if (outputBuffer) clReleaseMemObject(outputBuffer);
+        outputBuffer = nullptr;
+        boundOutput = nullptr;
+        outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY | CL_MEM_USE_HOST_PTR, pixelCount, output.pixels.data(), &error);
+        checkCL(error, "clCreateBuffer");
+        boundOutput = output.pixels.data();
+    }
+    setImageArguments();
+}
+
+void MultiOtsuGPU::run(const Image& image, Image& output, cl_event* histogramEvent,
+                       std::vector<cl_event>* thresholdsEvents, cl_event* lookupEvent) {
+    upload(image, output);
+    compute(histogramEvent, thresholdsEvents, lookupEvent);
+    download(output);
+}
+
+void MultiOtsuGPU::upload(const Image& image, Image& output) {
+    if (image.pixels.size() != pixelCount || output.pixels.size() != pixelCount) {
+        throw std::runtime_error("Image size does not match the GPU buffers");
+    }
+    if (!zeroCopy) {
+        checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, pixelCount, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
+        return;
+    }
+    bindImages(image, output);
+    cl_int error;
+    void* mapped = clEnqueueMapBuffer(cl.queue, inputBuffer, CL_FALSE, CL_MAP_WRITE_INVALIDATE_REGION, 0, pixelCount, 0, nullptr, nullptr, &error);
+    checkCL(error, "clEnqueueMapBuffer");
+    checkCL(clEnqueueUnmapMemObject(cl.queue, inputBuffer, mapped, 0, nullptr, nullptr), "clEnqueueUnmapMemObject");
+}
+
+void MultiOtsuGPU::compute(cl_event* histogramEvent, std::vector<cl_event>* thresholdsEvents, cl_event* lookupEvent) {
+    const size_t localSize = 256;
+    const size_t globalSize = 256 * localSize;
+    auto nextEvent = [&]() -> cl_event* {
+        if (!thresholdsEvents) return nullptr;
+        thresholdsEvents->push_back(nullptr);
+        return &thresholdsEvents->back();
+    };
+    checkCL(clEnqueueNDRangeKernel(cl.queue, clearHistogramKernel, 1, nullptr, &localSize, nullptr, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, histogramKernel, 1, nullptr, &globalSize, &localSize, 0, nullptr, histogramEvent), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, prefixKernel, 1, nullptr, &localSize, &localSize, 0, nullptr, nextEvent()), "clEnqueueNDRangeKernel");
+    for (int k = 2; k <= classes; ++k) {
+        const int firstEnd = k == classes ? 256 : k;
+        const size_t layerSize = static_cast<size_t>(257 - firstEnd) * localSize;
+        checkCL(clSetKernelArg(layerKernel, 4, sizeof(int), &k), "clSetKernelArg");
+        checkCL(clSetKernelArg(layerKernel, 5, sizeof(int), &firstEnd), "clSetKernelArg");
+        checkCL(clEnqueueNDRangeKernel(cl.queue, layerKernel, 1, nullptr, &layerSize, &localSize, 0, nullptr, nextEvent()), "clEnqueueNDRangeKernel");
+    }
+    checkCL(clEnqueueNDRangeKernel(cl.queue, lookupTableKernel, 1, nullptr, &localSize, &localSize, 0, nullptr, nextEvent()), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, lookupKernel, 1, nullptr, &pixelCount, nullptr, 0, nullptr, lookupEvent), "clEnqueueNDRangeKernel");
+}
+
+void MultiOtsuGPU::finish() {
+    checkCL(clFinish(cl.queue), "clFinish");
+}
+
+void MultiOtsuGPU::download(Image& output) {
+    if (output.pixels.size() != pixelCount) {
+        throw std::runtime_error("Image size does not match the GPU buffers");
+    }
+    if (!zeroCopy) {
+        checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_FALSE, 0, pixelCount, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+        checkCL(clEnqueueReadBuffer(cl.queue, thresholdsBuffer, CL_TRUE, 0, thresholdValues.size() * sizeof(cl_int), thresholdValues.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+    } else {
+        if (output.pixels.data() != boundOutput) {
+            throw std::runtime_error("Output image differs from the one given to upload");
+        }
+        const std::size_t thresholdsSize = thresholdValues.size() * sizeof(cl_int);
+        cl_int error;
+        void* mappedOutput = clEnqueueMapBuffer(cl.queue, outputBuffer, CL_FALSE, CL_MAP_READ, 0, pixelCount, 0, nullptr, nullptr, &error);
+        checkCL(error, "clEnqueueMapBuffer");
+        void* mappedThresholds = clEnqueueMapBuffer(cl.queue, thresholdsBuffer, CL_TRUE, CL_MAP_READ, 0, thresholdsSize, 0, nullptr, nullptr, &error);
+        checkCL(error, "clEnqueueMapBuffer");
+        if (mappedOutput != output.pixels.data()) std::memcpy(output.pixels.data(), mappedOutput, pixelCount);
+        if (mappedThresholds != thresholdValues.data()) std::memcpy(thresholdValues.data(), mappedThresholds, thresholdsSize);
+        checkCL(clEnqueueUnmapMemObject(cl.queue, outputBuffer, mappedOutput, 0, nullptr, nullptr), "clEnqueueUnmapMemObject");
+        checkCL(clEnqueueUnmapMemObject(cl.queue, thresholdsBuffer, mappedThresholds, 0, nullptr, nullptr), "clEnqueueUnmapMemObject");
+    }
+    if (thresholdValues.front() < 0) {
+        throw std::invalid_argument("Multi-Otsu needs at least as many distinct brightness levels as classes");
+    }
+}
+
+Image multiOtsuSegmentationGPU(const Image& image, int classes, bool zeroCopy) {
+    Image result = image;
+    MultiOtsuGPU gpu(image, classes, zeroCopy);
     gpu.run(image, result);
     return result;
 }

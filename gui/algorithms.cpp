@@ -52,6 +52,8 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
                             [&] { output = image; }, [](int) {})};
         case Algorithm::Otsu:
             return {measure([&] { output = otsuSegmentation(image, threads); }, repeats)};
+        case Algorithm::MultiOtsu:
+            return {measure([&] { output = multiOtsuSegmentation(image, parameters.classes, threads); }, repeats)};
         case Algorithm::Bernsen:
             return {measure([&] {
                 bernsenThreshold(image, output, parameters.radius, parameters.minContrast, threads);
@@ -127,6 +129,8 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
         }
         case Algorithm::Otsu:
             return runOtsuGPU(image, repeats, output);
+        case Algorithm::MultiOtsu:
+            throw std::runtime_error("Multi-Otsu nie ma jeszcze wersji GPU, odznacz tryb GPU");
         case Algorithm::Bernsen: {
             BernsenGPU gpu(image, parameters.radius, parameters.minContrast);
             return measureGPU(gpu, image, repeats, output);

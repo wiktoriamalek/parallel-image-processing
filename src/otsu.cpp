@@ -1,6 +1,8 @@
 #include "otsu.hpp"
 #include "parallel_utils.hpp"
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -89,6 +91,89 @@ Image otsuSegmentation(const Image& image, int threads) {
         applyThresholdRange(result, threshold, begin, end);
     });
     return result;
+}
+
+std::vector<int> calculateMultiOtsuThresholds(const Histogram& histogram, int classes) {
+    if (classes < 2) throw std::invalid_argument("Multi-Otsu needs at least two classes");
+
+    std::vector<int> levels;
+    std::vector<std::int64_t> prefixCount{0};
+    std::vector<std::int64_t> prefixSum{0};
+    for (int level = 0; level < static_cast<int>(histogram.size()); ++level) {
+        const auto count = static_cast<std::int64_t>(histogram[level]);
+        if (count == 0) continue;
+        levels.push_back(level);
+        prefixCount.push_back(prefixCount.back() + count);
+        prefixSum.push_back(prefixSum.back() + level * count);
+    }
+    const int distinct = static_cast<int>(levels.size());
+    if (distinct < classes) {
+        throw std::invalid_argument("Multi-Otsu needs at least as many distinct brightness levels as classes");
+    }
+
+    auto gain = [&](int begin, int end) {
+        const double count = static_cast<double>(prefixCount[end] - prefixCount[begin]);
+        const double sum = static_cast<double>(prefixSum[end] - prefixSum[begin]);
+        return sum * sum / count;
+    };
+
+    const int slack = distinct - classes;
+    std::vector<double> previous(distinct + 1);
+    std::vector<double> current(distinct + 1);
+    std::vector<std::vector<int>> split(classes, std::vector<int>(distinct + 1));
+    for (int end = 1; end <= slack + 1; ++end) previous[end] = gain(0, end);
+
+    for (int k = 2; k <= classes; ++k) {
+        auto solve = [&](auto& self, int lowEnd, int highEnd, int lowBegin, int highBegin) -> void {
+            if (lowEnd > highEnd) return;
+            const int end = (lowEnd + highEnd) / 2;
+            double bestValue = -std::numeric_limits<double>::infinity();
+            int bestBegin = lowBegin;
+            for (int begin = lowBegin; begin <= std::min(highBegin, end - 1); ++begin) {
+                const double value = previous[begin] + gain(begin, end);
+                if (value > bestValue) {
+                    bestValue = value;
+                    bestBegin = begin;
+                }
+            }
+            current[end] = bestValue;
+            split[k - 1][end] = bestBegin;
+            self(self, lowEnd, end - 1, lowBegin, bestBegin);
+            self(self, end + 1, highEnd, bestBegin, highBegin);
+        };
+        solve(solve, k == classes ? distinct : k, slack + k, k - 1, slack + k - 1);
+        std::swap(previous, current);
+    }
+
+    std::vector<int> thresholds(classes - 1);
+    int end = distinct;
+    for (int k = classes; k >= 2; --k) {
+        const int begin = split[k - 1][end];
+        thresholds[k - 2] = levels[begin - 1];
+        end = begin;
+    }
+    return thresholds;
+}
+
+std::array<unsigned char, 256> multiOtsuLookupTable(const std::vector<int>& thresholds) {
+    const int classes = static_cast<int>(thresholds.size()) + 1;
+    std::array<unsigned char, 256> lookup{};
+    int level = 0;
+    for (int k = 0; k < classes; ++k) {
+        const int last = k < classes - 1 ? thresholds[k] : 255;
+        const auto value = static_cast<unsigned char>(255 * k / std::max(1, classes - 1));
+        for (; level <= last; ++level) lookup[level] = value;
+    }
+    return lookup;
+}
+
+Image multiOtsuSegmentation(const Image& image, int classes, int threads) {
+    const auto lookup = multiOtsuLookupTable(calculateMultiOtsuThresholds(calculateHistogram(image, threads), classes));
+    Image segmented = image;
+    parallelRanges(segmented.pixels.size(), threads, [&](std::size_t begin, std::size_t end, int) {
+        for (std::size_t i = begin; i < end; ++i) segmented.pixels[i] = lookup[segmented.pixels[i]];
+    });
+    return segmented;
 }
 
 OtsuGPU::OtsuGPU(const Image& image)

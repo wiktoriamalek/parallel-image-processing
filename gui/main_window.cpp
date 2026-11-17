@@ -28,7 +28,7 @@
 #include <utility>
 
 namespace {
-const char* algorithmNames[] = {"Progowanie", "Otsu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
+const char* algorithmNames[] = {"Progowanie", "Otsu", "Multi-Otsu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
                                 "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru"};
 
 QImage toQImage(const Image& image) {
@@ -122,6 +122,9 @@ QWidget* MainWindow::createControls() {
     thresholdSpin = new QSpinBox;
     thresholdSpin->setRange(0, 255);
     thresholdSpin->setValue(defaults.threshold);
+    classesSpin = new QSpinBox;
+    classesSpin->setRange(2, 16);
+    classesSpin->setValue(defaults.classes);
     radiusSpin = new QSpinBox;
     radiusSpin->setRange(1, 50);
     radiusSpin->setValue(defaults.radius);
@@ -164,6 +167,8 @@ QWidget* MainWindow::createControls() {
     parameterPages = new QStackedWidget;
     parameterPages->addWidget(parameterPage({{"Próg", thresholdSpin}}));
     parameterPages->addWidget(parameterPage({{"", note("Próg jest wyznaczany z histogramu, bez parametrów.")}}));
+    parameterPages->addWidget(parameterPage({{"Liczba klas", classesSpin},
+        {"", note("K klas to K − 1 progów wyznaczanych z histogramu.")}}));
     parameterPages->addWidget(parameterPage({{"Promień okna", radiusSpin}, {"Minimalny kontrast", contrastSpin}}));
     parameterPages->addWidget(parameterPage({{"Filtr", filterBox}}));
     parameterPages->addWidget(parameterPage({{"", sortingNetworkCheck}}));
@@ -360,6 +365,7 @@ Algorithm MainWindow::currentAlgorithm() const {
 Parameters MainWindow::currentParameters() const {
     Parameters parameters;
     parameters.threshold = thresholdSpin->value();
+    parameters.classes = classesSpin->value();
     parameters.radius = radiusSpin->value();
     parameters.minContrast = contrastSpin->value();
     parameters.filter = filterBox->currentIndex();

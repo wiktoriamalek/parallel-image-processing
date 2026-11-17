@@ -37,8 +37,9 @@ add_executable(distortion_test tests/distortion_test.cpp)
 add_executable(bernsen_test tests/bernsen_test.cpp)
 add_executable(median_filter_test tests/median_filter_test.cpp)
 add_executable(region_growing_test tests/region_growing_test.cpp)
+add_executable(multi_otsu_test tests/multi_otsu_test.cpp)
 
-foreach(target img_proc check_opencl thresholding_time_comparison identity_convolution_test otsu_test distortion_test bernsen_test median_filter_test region_growing_test)
+foreach(target img_proc check_opencl thresholding_time_comparison identity_convolution_test otsu_test distortion_test bernsen_test median_filter_test region_growing_test multi_otsu_test)
     target_link_libraries(${target} PRIVATE image_processing)
 endforeach()
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstddef>
+#include <vector>
 #include "image.hpp"
 #include "opencl_utils.hpp"
 
@@ -9,6 +10,9 @@ Histogram calculateHistogram(const Image& image, int threads = 1);
 int calculateOtsuThreshold(const Histogram& histogram);
 Image otsuSegmentation(const Image& image, int threads = 1);
 Image otsuSegmentationGPU(const Image& image);
+std::vector<int> calculateMultiOtsuThresholds(const Histogram& histogram, int classes);
+std::array<unsigned char, 256> multiOtsuLookupTable(const std::vector<int>& thresholds);
+Image multiOtsuSegmentation(const Image& image, int classes, int threads = 1);
 
 class OtsuGPU {
 public:

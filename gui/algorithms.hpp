@@ -3,11 +3,12 @@
 #include <string>
 #include <vector>
 
-enum class Algorithm { Threshold, Otsu, Bernsen, Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
+enum class Algorithm { Threshold, Otsu, MultiOtsu, Bernsen, Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
 enum class Mode { CPU1, CPUN, GPU };
 
 struct Parameters {
     int threshold = 128;
+    int classes = 3;
     int radius = 7;
     int minContrast = 15;
     int filter = 0;

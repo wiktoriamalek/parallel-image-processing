@@ -23,6 +23,7 @@ add_library(image_processing
         src/median_filter.cpp
         src/resize.cpp
         src/region_growing.cpp
+        src/negative.cpp
 )
 
 target_include_directories(image_processing PUBLIC include)

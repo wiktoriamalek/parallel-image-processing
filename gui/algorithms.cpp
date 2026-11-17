@@ -4,6 +4,7 @@
 #include "convolution.hpp"
 #include "distortion.hpp"
 #include "median_filter.hpp"
+#include "negative.hpp"
 #include "otsu.hpp"
 #include "region_growing.hpp"
 #include "resize.hpp"
@@ -50,6 +51,8 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
         case Algorithm::Threshold:
             return {measure([&] { ThresholdParallel(output, parameters.threshold, threads); }, repeats,
                             [&] { output = image; }, [](int) {})};
+        case Algorithm::Negative:
+            return {measure([&] { negativeParallel(image, output, threads); }, repeats)};
         case Algorithm::Otsu:
             return {measure([&] { output = otsuSegmentation(image, threads); }, repeats)};
         case Algorithm::MultiOtsu:
@@ -149,6 +152,10 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
     switch (algorithm) {
         case Algorithm::Threshold: {
             ThresholdGPU gpu(image, parameters.threshold);
+            return measureGPU(gpu, image, repeats, output);
+        }
+        case Algorithm::Negative: {
+            NegativeGPU gpu(image);
             return measureGPU(gpu, image, repeats, output);
         }
         case Algorithm::Otsu:

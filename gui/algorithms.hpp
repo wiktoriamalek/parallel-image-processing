@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-enum class Algorithm { Threshold, Otsu, MultiOtsu, Bernsen, Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
+enum class Algorithm { Threshold, Negative, Otsu, MultiOtsu, Bernsen, Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
 enum class Mode { CPU1, CPUN, GPU };
 
 struct Parameters {

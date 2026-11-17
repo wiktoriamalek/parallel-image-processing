@@ -17,3 +17,4 @@ image,width,height,threshold,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,
 "images/cms_resolution_change/cms_2048.png",2048,2048,98,11,20,3213.646,913.3965,64.4795,269.770833333,707.9165,408.75
 "images/cms_resolution_change/cms_4096.png",4096,4096,98,11,20,15706.854,3461.75,86.5835,1118.33333333,2245.2705,1358.396
 "images/cms_resolution_change/cms_8192.png",8192,8192,98,11,20,78832.1875,14806.5415,64.0415,4460.54166667,7905.125,4751.542
+"images/cms_resolution_change/cms_256.png",256,256,95,2,100,35.125,66.7295,18.334,25.5625,322.312,166.083

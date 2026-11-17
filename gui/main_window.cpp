@@ -28,7 +28,7 @@
 #include <utility>
 
 namespace {
-const char* algorithmNames[] = {"Progowanie", "Otsu", "Multi-Otsu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
+const char* algorithmNames[] = {"Progowanie", "Negatyw", "Otsu", "Multi-Otsu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
                                 "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru"};
 
 QImage toQImage(const Image& image) {
@@ -168,6 +168,7 @@ QWidget* MainWindow::createControls() {
 
     parameterPages = new QStackedWidget;
     parameterPages->addWidget(parameterPage({{"Próg", thresholdSpin}}));
+    parameterPages->addWidget(parameterPage({{"", note("Każdy piksel p zamienia się na 255 − p, bez parametrów.")}}));
     parameterPages->addWidget(parameterPage({{"", note("Próg jest wyznaczany z histogramu, bez parametrów.")}}));
     parameterPages->addWidget(parameterPage({{"Liczba klas", classesSpin}, {"", zeroCopyCheck},
         {"", note("K klas to K − 1 progów wyznaczanych z histogramu.")}}));

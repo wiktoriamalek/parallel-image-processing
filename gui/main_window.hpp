@@ -69,8 +69,12 @@ private:
     QSpinBox* contrastSpin;
     QComboBox* filterBox;
     QCheckBox* sortingNetworkCheck;
+    QComboBox* distortionModelBox;
     QDoubleSpinBox* k1Spin;
     QDoubleSpinBox* k2Spin;
+    QDoubleSpinBox* k3Spin;
+    QDoubleSpinBox* p1Spin;
+    QDoubleSpinBox* p2Spin;
     QComboBox* interpolationBox;
     QDoubleSpinBox* scaleSpin;
     QSpinBox* seedXSpin;

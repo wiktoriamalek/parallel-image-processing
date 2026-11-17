@@ -189,3 +189,179 @@ Image correctRadialDistortionGPU(const Image& image, float k1, float k2) {
     gpu.run(image, output);
     return output;
 }
+
+namespace {
+unsigned char sampleBilinear(const Image& image, float sourceX, float sourceY) {
+    if (!(sourceX >= 0 && sourceX <= image.width - 1 && sourceY >= 0 && sourceY <= image.height - 1)) {
+        return 0;
+    }
+    int x0 = std::floor(sourceX);
+    int y0 = std::floor(sourceY);
+    int x1 = std::min(image.width - 1, x0 + 1);
+    int y1 = std::min(image.height - 1, y0 + 1);
+    float fx = sourceX - x0;
+    float fy = sourceY - y0;
+    float p00 = image.pixels[y0*image.width+x0];
+    float p10 = image.pixels[y0*image.width+x1];
+    float p01 = image.pixels[y1*image.width+x0];
+    float p11 = image.pixels[y1*image.width+x1];
+    float top = (1-fx)*p00+fx*p10;
+    float bottom = (1-fx)*p01+fx*p11;
+    return static_cast<unsigned char>(std::lround((1-fy)*top+fy*bottom));
+}
+
+struct BrownConradyTerms {
+    double factor;
+    double tangentialX;
+    double tangentialY;
+};
+
+BrownConradyTerms brownConradyTerms(const BrownConradyCoefficients& coefficients, double x, double y) {
+    double r2 = x * x + y * y;
+    double factor = 1.0 + coefficients.k1 * r2 + coefficients.k2 * r2 * r2 + coefficients.k3 * r2 * r2 * r2;
+    double tangentialX = 2.0 * coefficients.p1 * x * y + coefficients.p2 * (r2 + 2.0 * x * x);
+    double tangentialY = coefficients.p1 * (r2 + 2.0 * y * y) + 2.0 * coefficients.p2 * x * y;
+    return {factor, tangentialX, tangentialY};
+}
+}
+
+Image distortBrownConrady(const Image& image, const BrownConradyCoefficients& coefficients, int threads) {
+    Image output = image;
+    double centerX = (image.width - 1) / 2.0;
+    double centerY = (image.height - 1) / 2.0;
+    double scale = std::max(image.width, image.height) / 2.0;
+
+    parallelRanges(image.height, threads, [&](std::size_t begin, std::size_t end, int) {
+        for (int pixelY = static_cast<int>(begin); pixelY < static_cast<int>(end); pixelY++) {
+            for (int pixelX = 0; pixelX < image.width; pixelX++) {
+                double distortedX = (pixelX - centerX) / scale;
+                double distortedY = (pixelY - centerY) / scale;
+                double undistortedX = distortedX;
+                double undistortedY = distortedY;
+                for (int iteration = 0; iteration < 100; iteration++) {
+                    BrownConradyTerms terms = brownConradyTerms(coefficients, undistortedX, undistortedY);
+                    if (terms.factor <= 0.0) break;
+                    double nextX = (distortedX - terms.tangentialX) / terms.factor;
+                    double nextY = (distortedY - terms.tangentialY) / terms.factor;
+                    bool converged = std::abs(nextX - undistortedX) < 1e-12 && std::abs(nextY - undistortedY) < 1e-12;
+                    undistortedX = nextX;
+                    undistortedY = nextY;
+                    if (converged) break;
+                }
+                BrownConradyTerms terms = brownConradyTerms(coefficients, undistortedX, undistortedY);
+                double checkX = undistortedX * terms.factor + terms.tangentialX;
+                double checkY = undistortedY * terms.factor + terms.tangentialY;
+                int destinationIndex = pixelY * image.width + pixelX;
+                if (!(terms.factor > 0.0 && std::abs(checkX - distortedX) < 1e-6 && std::abs(checkY - distortedY) < 1e-6)) {
+                    output.pixels[destinationIndex] = 0;
+                    continue;
+                }
+                float sourceX = static_cast<float>(undistortedX * scale + centerX);
+                float sourceY = static_cast<float>(undistortedY * scale + centerY);
+                output.pixels[destinationIndex] = sampleBilinear(image, sourceX, sourceY);
+            }
+        }
+    });
+    return output;
+}
+
+void correctBrownConradyRange(const Image& image, Image& output, const BrownConradyCoefficients& coefficients, int startY, int endY) {
+    float centerX = (image.width - 1)/2.0f;
+    float centerY = (image.height - 1)/2.0f;
+    float scale = std::max(image.width, image.height) / 2.0f;
+    float k1 = coefficients.k1;
+    float k2 = coefficients.k2;
+    float k3 = coefficients.k3;
+    float p1 = coefficients.p1;
+    float p2 = coefficients.p2;
+
+    for (int pixelY = startY; pixelY < endY; pixelY++) {
+        for (int pixelX = 0; pixelX < image.width; pixelX++) {
+            float relativeX = pixelX - centerX;
+            float relativeY = pixelY - centerY;
+
+            float normalizedX = relativeX / scale;
+            float normalizedY = relativeY / scale;
+
+            float r2 = normalizedX*normalizedX + normalizedY*normalizedY;
+            float factor = 1.0f + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2;
+            float tangentialX = 2.0f * p1 * normalizedX * normalizedY + p2 * (r2 + 2.0f * normalizedX * normalizedX);
+            float tangentialY = p1 * (r2 + 2.0f * normalizedY * normalizedY) + 2.0f * p2 * normalizedX * normalizedY;
+
+            float distortedX = normalizedX * factor + tangentialX;
+            float distortedY = normalizedY * factor + tangentialY;
+
+            float distortedRelativeX = distortedX * scale;
+            float distortedRelativeY = distortedY * scale;
+
+            float distortedPixelX = distortedRelativeX + centerX;
+            float distortedPixelY = distortedRelativeY + centerY;
+
+            output.pixels[pixelY * image.width + pixelX] = sampleBilinear(image, distortedPixelX, distortedPixelY);
+        }
+    }
+}
+
+void correctBrownConradyCPU(const Image& image, const BrownConradyCoefficients& coefficients, Image& output, int threads) {
+    if (output.width != image.width || output.height != image.height || output.pixels.size() != image.pixels.size()) {
+        throw std::runtime_error("Output image size does not match the input");
+    }
+    parallelRanges(image.height, threads, [&](std::size_t begin, std::size_t end, int) {
+        correctBrownConradyRange(image, output, coefficients, static_cast<int>(begin), static_cast<int>(end));
+    });
+}
+
+Image correctBrownConradyCPU(const Image& image, const BrownConradyCoefficients& coefficients, int threads) {
+    Image output = image;
+    correctBrownConradyCPU(image, coefficients, output, threads);
+    return output;
+}
+
+BrownConradyGPU::BrownConradyGPU(const Image& image, const BrownConradyCoefficients& coefficients)
+    : cl("kernels/brown_conrady_correction.cl"),
+      bufferSize(image.pixels.size()),
+      globalWorkSize{static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)} {
+    try {
+        cl_int error;
+        inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        outputBuffer = clCreateBuffer(cl.context, CL_MEM_WRITE_ONLY, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer");
+        kernel = clCreateKernel(cl.program, "brown_conrady_correction", &error);
+        checkCL(error, "clCreateKernel");
+
+        checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 2, sizeof(int), &image.width), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 3, sizeof(int), &image.height), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 4, sizeof(float), &coefficients.k1), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 5, sizeof(float), &coefficients.k2), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 6, sizeof(float), &coefficients.k3), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 7, sizeof(float), &coefficients.p1), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 8, sizeof(float), &coefficients.p2), "clSetKernelArg");
+    } catch (...) {
+        release();
+        throw;
+    }
+}
+
+void BrownConradyGPU::release() {
+    if (kernel) clReleaseKernel(kernel);
+    if (inputBuffer) clReleaseMemObject(inputBuffer);
+    if (outputBuffer) clReleaseMemObject(outputBuffer);
+}
+
+BrownConradyGPU::~BrownConradyGPU() {
+    release();
+}
+
+void BrownConradyGPU::run(const Image& image, Image& output, cl_event* kernelEvent) {
+    if (static_cast<std::size_t>(image.width) != globalWorkSize[0] || static_cast<std::size_t>(image.height) != globalWorkSize[1] ||
+        output.width != image.width || output.height != image.height ||
+        image.pixels.size() != bufferSize || output.pixels.size() != bufferSize) {
+        throw std::runtime_error("Image dimensions do not match the GPU buffers");
+    }
+    checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
+}

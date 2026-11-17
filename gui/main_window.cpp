@@ -146,6 +146,28 @@ QWidget* MainWindow::createControls() {
     }
     k1Spin->setValue(defaults.k1);
     k2Spin->setValue(defaults.k2);
+    k3Spin = new QDoubleSpinBox;
+    k3Spin->setRange(-1.0, 1.0);
+    k3Spin->setDecimals(3);
+    k3Spin->setSingleStep(0.01);
+    k3Spin->setValue(defaults.k3);
+    p1Spin = new QDoubleSpinBox;
+    p2Spin = new QDoubleSpinBox;
+    for (auto* spin : {p1Spin, p2Spin}) {
+        spin->setRange(-0.2, 0.2);
+        spin->setDecimals(4);
+        spin->setSingleStep(0.001);
+    }
+    p1Spin->setValue(defaults.p1);
+    p2Spin->setValue(defaults.p2);
+    distortionModelBox = new QComboBox;
+    distortionModelBox->addItems({"Radialny (k1, k2)", "Brown–Conrady (k1, k2, k3, p1, p2)"});
+    distortionModelBox->setCurrentIndex(defaults.distortionModel);
+    auto updateDistortionModel = [this](int model) {
+        for (auto* spin : {k3Spin, p1Spin, p2Spin}) spin->setEnabled(model == 1);
+    };
+    connect(distortionModelBox, &QComboBox::currentIndexChanged, this, updateDistortionModel);
+    updateDistortionModel(defaults.distortionModel);
     interpolationBox = new QComboBox;
     interpolationBox->addItems({"Najbliższy sąsiad", "Dwuliniowa"});
     interpolationBox->setCurrentIndex(defaults.bilinear ? 1 : 0);
@@ -175,8 +197,10 @@ QWidget* MainWindow::createControls() {
     parameterPages->addWidget(parameterPage({{"Promień okna", radiusSpin}, {"Minimalny kontrast", contrastSpin}}));
     parameterPages->addWidget(parameterPage({{"Filtr", filterBox}}));
     parameterPages->addWidget(parameterPage({{"", sortingNetworkCheck}}));
-    parameterPages->addWidget(parameterPage({{"k1", k1Spin}, {"k2", k2Spin},
-        {"", note("Wczytaj zniekształcony obraz, np. z images/mitsubishi_distorted.")}}));
+    parameterPages->addWidget(parameterPage({{"Model", distortionModelBox}, {"k1", k1Spin}, {"k2", k2Spin},
+        {"k3", k3Spin}, {"p1", p1Spin}, {"p2", p2Spin},
+        {"", note("Wczytaj zniekształcony obraz, np. z images/mitsubishi_distorted. Brown–Conrady dodaje "
+                  "k3·r⁶ i dystorsję styczną p1, p2, tak jak w OpenCV.")}}));
     parameterPages->addWidget(parameterPage({{"Interpolacja", interpolationBox}, {"Skala", scaleSpin}}));
     parameterPages->addWidget(parameterPage({{"Ziarno x", seedXSpin}, {"Ziarno y", seedYSpin}, {"Tolerancja", toleranceSpin},
         {"", localTilesCheck},
@@ -376,6 +400,10 @@ Parameters MainWindow::currentParameters() const {
     parameters.sortingNetwork = sortingNetworkCheck->isChecked();
     parameters.k1 = static_cast<float>(k1Spin->value());
     parameters.k2 = static_cast<float>(k2Spin->value());
+    parameters.distortionModel = distortionModelBox->currentIndex();
+    parameters.k3 = static_cast<float>(k3Spin->value());
+    parameters.p1 = static_cast<float>(p1Spin->value());
+    parameters.p2 = static_cast<float>(p2Spin->value());
     parameters.bilinear = interpolationBox->currentIndex() == 1;
     parameters.scale = static_cast<float>(scaleSpin->value());
     parameters.seedX = seedXSpin->value();

@@ -5,6 +5,31 @@
 #include <cmath>
 #include <stdexcept>
 
+const std::vector<ConvolutionFilter>& convolutionFilters() {
+    static const std::vector<ConvolutionFilter> filters = {
+        {"sharpen", {{{0, -1, 0}, {-1, 5, -1}, {0, -1, 0}}}, false},
+        // box blur 3x3 - it takes for each pixel, 9 values from the surrounding pixels and calculates mean
+        {"box_blur", {{{1.0f/9, 1.0f/9, 1.0f/9}, {1.0f/9, 1.0f/9, 1.0f/9}, {1.0f/9, 1.0f/9, 1.0f/9}}}, false},
+        {"edge_detection_h", {{{-1, -1, -1}, {0, 0, 0}, {1, 1, 1}}}, true},
+        {"edge_detection_v", {{{-1, 0, 1}, {-1, 0, 1}, {-1, 0, 1}}}, true},
+        {"identity", {{{0, 0, 0}, {0, 1, 0}, {0, 0, 0}}}, false},
+        {"gaussian_blur", {{{1.0f/16, 2.0f/16, 1.0f/16}, {2.0f/16, 4.0f/16, 2.0f/16}, {1.0f/16, 2.0f/16, 1.0f/16}}}, false},
+        {"sobel_h", {{{-1, -2, -1}, {0, 0, 0}, {1, 2, 1}}}, true},
+        {"sobel_v", {{{-1, 0, 1}, {-2, 0, 2}, {-1, 0, 1}}}, true},
+        {"scharr_h", {{{3, 10, 3}, {0, 0, 0}, {-3, -10, -3}}}, true},
+        {"scharr_v", {{{3, 0, -3}, {10, 0, -10}, {3, 0, -3}}}, true},
+        {"laplacian", {{{0, -1, 0}, {-1, 4, -1}, {0, -1, 0}}}, true}
+    };
+    return filters;
+}
+
+const ConvolutionFilter& convolutionFilter(const std::string& name) {
+    for (const auto& filter : convolutionFilters()) {
+        if (filter.name == name) return filter;
+    }
+    throw std::invalid_argument("Unknown filter: " + name);
+}
+
 Image convolution(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue) {
     Image result = image;
     convolution(image, kernel, absoluteValue, result);

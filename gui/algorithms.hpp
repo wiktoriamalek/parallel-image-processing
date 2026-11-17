@@ -16,6 +16,10 @@ struct Parameters {
     bool sortingNetwork = false;
     float k1 = 0.15f;
     float k2 = 0.0f;
+    int distortionModel = 0;
+    float k3 = 0.0f;
+    float p1 = 0.0f;
+    float p2 = 0.0f;
     bool bilinear = true;
     float scale = 2.0f;
     int seedX = 0;

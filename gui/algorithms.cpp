@@ -16,18 +16,8 @@
 #include <utility>
 
 namespace {
-using Filter = std::array<std::array<float, 3>, 3>;
-
-const std::vector<std::pair<std::string, Filter>> filters = {
-    {"sharpen", {{{0, -1, 0}, {-1, 5, -1}, {0, -1, 0}}}},
-    {"box_blur", {{{1.0f/9, 1.0f/9, 1.0f/9}, {1.0f/9, 1.0f/9, 1.0f/9}, {1.0f/9, 1.0f/9, 1.0f/9}}}},
-    {"edge_detection_h", {{{-1, -1, -1}, {0, 0, 0}, {1, 1, 1}}}},
-    {"edge_detection_v", {{{-1, 0, 1}, {-1, 0, 1}, {-1, 0, 1}}}},
-    {"identity", {{{0, 0, 0}, {0, 1, 0}, {0, 0, 0}}}}
-};
-
-bool isEdgeFilter(const std::string& name) {
-    return name == "edge_detection_h" || name == "edge_detection_v";
+BrownConradyCoefficients brownConradyCoefficients(const Parameters& parameters) {
+    return {parameters.k1, parameters.k2, parameters.k3, parameters.p1, parameters.p2};
 }
 
 template<class GPU>
@@ -62,13 +52,18 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
                 bernsenThreshold(image, output, parameters.radius, parameters.minContrast, threads);
             }, repeats)};
         case Algorithm::Convolution: {
-            const auto& selected = filters.at(parameters.filter);
-            bool absoluteValue = isEdgeFilter(selected.first);
-            return {measure([&] { convolution(image, selected.second, absoluteValue, output, threads); }, repeats)};
+            const ConvolutionFilter& selected = convolutionFilters().at(parameters.filter);
+            return {measure([&] {
+                convolution(image, selected.kernel, selected.absoluteValue, output, threads);
+            }, repeats)};
         }
         case Algorithm::MedianFilter:
             return {measure([&] { medianFilterParallel(image, output, threads, parameters.sortingNetwork); }, repeats)};
         case Algorithm::Distortion:
+            if (parameters.distortionModel == 1) {
+                BrownConradyCoefficients coefficients = brownConradyCoefficients(parameters);
+                return {measure([&] { correctBrownConradyCPU(image, coefficients, output, threads); }, repeats)};
+            }
             return {measure([&] {
                 correctRadialDistortionCPU(image, parameters.k1, parameters.k2, output, threads);
             }, repeats)};
@@ -167,8 +162,8 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return measureGPU(gpu, image, repeats, output);
         }
         case Algorithm::Convolution: {
-            const auto& selected = filters.at(parameters.filter);
-            ConvolutionGPU gpu(image, selected.second, isEdgeFilter(selected.first));
+            const ConvolutionFilter& selected = convolutionFilters().at(parameters.filter);
+            ConvolutionGPU gpu(image, selected.kernel, selected.absoluteValue);
             return measureGPU(gpu, image, repeats, output);
         }
         case Algorithm::MedianFilter: {
@@ -176,6 +171,10 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return measureGPU(gpu, image, repeats, output);
         }
         case Algorithm::Distortion: {
+            if (parameters.distortionModel == 1) {
+                BrownConradyGPU gpu(image, brownConradyCoefficients(parameters));
+                return measureGPU(gpu, image, repeats, output);
+            }
             RadialDistortionGPU gpu(image, parameters.k1, parameters.k2);
             return measureGPU(gpu, image, repeats, output);
         }
@@ -198,7 +197,7 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
 const std::vector<std::string>& convolutionFilterNames() {
     static const std::vector<std::string> names = [] {
         std::vector<std::string> result;
-        for (const auto& filter : filters) result.push_back(filter.first);
+        for (const auto& filter : convolutionFilters()) result.push_back(filter.name);
         return result;
     }();
     return names;

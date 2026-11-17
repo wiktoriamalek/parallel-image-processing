@@ -3,6 +3,17 @@
 #include "opencl_utils.hpp"
 #include <array>
 #include <cstddef>
+#include <string>
+#include <vector>
+
+struct ConvolutionFilter {
+    std::string name;
+    std::array<std::array<float, 3>, 3> kernel;
+    bool absoluteValue;
+};
+
+const std::vector<ConvolutionFilter>& convolutionFilters();
+const ConvolutionFilter& convolutionFilter(const std::string& name);
 
 Image convolution(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue);
 void convolution(const Image& image, const std::array<std::array<float, 3>, 3>& kernel, bool absoluteValue, Image& result, int threads = 1);

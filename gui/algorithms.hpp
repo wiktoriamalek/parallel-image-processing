@@ -1,16 +1,17 @@
 #pragma once
 #include "image.hpp"
+#include <optional>
 #include <string>
 #include <vector>
 
-enum class Algorithm { Threshold, Negative, Contrast, Otsu, MultiOtsu, Bernsen, Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
-enum class Mode { CPU1, CPUN, GPU };
+enum class Algorithm { Threshold, Negative, Contrast, Otsu, MultiOtsu, PeaksValleys, Bernsen, Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
+enum class Mode { CPU1, CPUN, GPU, GPUZeroCopy };
 
 struct Parameters {
     int threshold = 128;
     float contrastFactor = 2.0f;
     int classes = 3;
-    bool zeroCopy = true;
+    int maxClasses = 3;
     int radius = 7;
     int minContrast = 15;
     int filter = 0;
@@ -32,8 +33,11 @@ struct Parameters {
 struct Timing {
     double totalUs = 0.0;
     double kernelUs = -1.0;
+    std::optional<std::vector<int>> thresholds;
+    int smoothingIterations = -1;
 };
 
 const std::vector<std::string>& convolutionFilterNames();
+bool supportsZeroCopy(Algorithm algorithm);
 Timing runAlgorithm(Algorithm algorithm, Mode mode, const Image& image, const Parameters& parameters,
                     int threads, int repeats, Image& output);

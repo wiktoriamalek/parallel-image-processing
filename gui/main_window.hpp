@@ -66,6 +66,7 @@ private:
     QDoubleSpinBox* contrastFactorSpin;
     QSpinBox* classesSpin;
     QCheckBox* zeroCopyCheck;
+    QSpinBox* maxClassesSpin;
     QSpinBox* radiusSpin;
     QSpinBox* contrastSpin;
     QComboBox* filterBox;

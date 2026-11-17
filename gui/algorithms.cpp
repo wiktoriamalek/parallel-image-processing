@@ -7,6 +7,7 @@
 #include "median_filter.hpp"
 #include "negative.hpp"
 #include "otsu.hpp"
+#include "peaks_valleys_detection.hpp"
 #include "region_growing.hpp"
 #include "resize.hpp"
 #include "thresholding.hpp"
@@ -48,8 +49,19 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return {measure([&] { contrastParallel(image, output, threads, parameters.contrastFactor); }, repeats)};
         case Algorithm::Otsu:
             return {measure([&] { output = otsuSegmentation(image, threads); }, repeats)};
-        case Algorithm::MultiOtsu:
-            return {measure([&] { output = multiOtsuSegmentation(image, parameters.classes, threads); }, repeats)};
+        case Algorithm::MultiOtsu: {
+            Timing timing{measure([&] { output = multiOtsuSegmentation(image, parameters.classes, threads); }, repeats)};
+            timing.thresholds = calculateMultiOtsuThresholds(calculateHistogram(image), parameters.classes);
+            return timing;
+        }
+        case Algorithm::PeaksValleys: {
+            Timing timing{measure([&] {
+                peaks_valleys_detectionParallel(image, output, threads, parameters.maxClasses);
+            }, repeats)};
+            timing.thresholds = peaks_valleys_detectionThresholds(calculateHistogram(image), parameters.maxClasses,
+                                                                  &timing.smoothingIterations);
+            return timing;
+        }
         case Algorithm::Bernsen:
             return {measure([&] {
                 bernsenThreshold(image, output, parameters.radius, parameters.minContrast, threads);
@@ -109,8 +121,8 @@ Timing runOtsuGPU(const Image& image, int repeats, Image& output) {
     return timing;
 }
 
-Timing runMultiOtsuGPU(const Image& image, const Parameters& parameters, int repeats, Image& output) {
-    MultiOtsuGPU gpu(image, parameters.classes, parameters.zeroCopy);
+Timing runMultiOtsuGPU(const Image& image, const Parameters& parameters, bool zeroCopy, int repeats, Image& output) {
+    MultiOtsuGPU gpu(image, parameters.classes, zeroCopy);
     Timing timing;
     std::vector<double> kernelTimes;
     cl_event histogramEvent = nullptr;
@@ -130,6 +142,29 @@ Timing runMultiOtsuGPU(const Image& image, const Parameters& parameters, int rep
         if (repeat >= 0) kernelTimes.push_back(time);
     });
     timing.kernelUs = median(kernelTimes);
+    timing.thresholds = gpu.thresholds();
+    return timing;
+}
+
+Timing runPeaksValleysGPU(const Image& image, const Parameters& parameters, bool zeroCopy, int repeats, Image& output) {
+    Peaks_valleys_detectionGPU gpu(image, parameters.maxClasses, zeroCopy);
+    Timing timing;
+    std::vector<double> kernelTimes;
+    cl_event histogramEvent = nullptr;
+    cl_event thresholdsEvent = nullptr;
+    cl_event lookupEvent = nullptr;
+    timing.totalUs = measure([&] {
+        gpu.run(image, output, &histogramEvent, &thresholdsEvent, &lookupEvent);
+    }, repeats, [] {}, [&](int repeat) {
+        double time = kernelTimeUs(histogramEvent) + kernelTimeUs(thresholdsEvent) + kernelTimeUs(lookupEvent);
+        checkCL(clReleaseEvent(histogramEvent), "clReleaseEvent");
+        checkCL(clReleaseEvent(thresholdsEvent), "clReleaseEvent");
+        checkCL(clReleaseEvent(lookupEvent), "clReleaseEvent");
+        if (repeat >= 0) kernelTimes.push_back(time);
+    });
+    timing.kernelUs = median(kernelTimes);
+    timing.thresholds = gpu.thresholds();
+    timing.smoothingIterations = gpu.iterations();
     return timing;
 }
 
@@ -145,7 +180,8 @@ Timing runRegionGrowingGPU(const Image& image, const Parameters& parameters, int
     return timing;
 }
 
-Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& parameters, int repeats, Image& output) {
+Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& parameters, bool zeroCopy, int repeats,
+              Image& output) {
     output = image;
     switch (algorithm) {
         case Algorithm::Threshold: {
@@ -163,7 +199,9 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
         case Algorithm::Otsu:
             return runOtsuGPU(image, repeats, output);
         case Algorithm::MultiOtsu:
-            return runMultiOtsuGPU(image, parameters, repeats, output);
+            return runMultiOtsuGPU(image, parameters, zeroCopy, repeats, output);
+        case Algorithm::PeaksValleys:
+            return runPeaksValleysGPU(image, parameters, zeroCopy, repeats, output);
         case Algorithm::Bernsen: {
             BernsenGPU gpu(image, parameters.radius, parameters.minContrast);
             return measureGPU(gpu, image, repeats, output);
@@ -210,9 +248,17 @@ const std::vector<std::string>& convolutionFilterNames() {
     return names;
 }
 
+bool supportsZeroCopy(Algorithm algorithm) {
+    return algorithm == Algorithm::MultiOtsu || algorithm == Algorithm::PeaksValleys;
+}
 
 Timing runAlgorithm(Algorithm algorithm, Mode mode, const Image& image, const Parameters& parameters,
                     int threads, int repeats, Image& output) {
-    if (mode == Mode::GPU) return runGPU(algorithm, image, parameters, repeats, output);
+    if (mode == Mode::GPUZeroCopy && !supportsZeroCopy(algorithm)) {
+        throw std::invalid_argument("This algorithm has no zero-copy GPU version");
+    }
+    if (mode == Mode::GPU || mode == Mode::GPUZeroCopy) {
+        return runGPU(algorithm, image, parameters, mode == Mode::GPUZeroCopy, repeats, output);
+    }
     return runCPU(algorithm, image, parameters, mode == Mode::CPU1 ? 1 : threads, repeats, output);
 }

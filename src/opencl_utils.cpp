@@ -28,7 +28,9 @@ double kernelTimeUs(cl_event event) {
     return nanoseconds / 1000.0;
 }
 
-OpenCL::OpenCL(const std::string& kernelPath) {
+OpenCL::OpenCL(const std::string& kernelPath) : OpenCL(std::vector<std::string>{kernelPath}) {}
+
+OpenCL::OpenCL(const std::vector<std::string>& kernelPaths) {
     try {
         cl_uint count = 0;
         checkCL(clGetPlatformIDs(0, nullptr, &count), "clGetPlatformIDs");
@@ -49,13 +51,19 @@ OpenCL::OpenCL(const std::string& kernelPath) {
         queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &error);
         checkCL(error, "clCreateCommandQueue");
 
-        std::ifstream file(kernelPath);
-        if (!file) throw std::runtime_error("Could not open " + kernelPath);
-        std::ostringstream sourceStream;
-        sourceStream << file.rdbuf();
-        std::string source = sourceStream.str();
-        const char* text = source.c_str();
-        program = clCreateProgramWithSource(context, 1, &text, nullptr, &error);
+        std::vector<std::string> sources;
+        std::string names;
+        for (const std::string& kernelPath : kernelPaths) {
+            std::ifstream file(kernelPath);
+            if (!file) throw std::runtime_error("Could not open " + kernelPath);
+            std::ostringstream sourceStream;
+            sourceStream << file.rdbuf() << '\n';
+            sources.push_back(sourceStream.str());
+            names += (names.empty() ? "" : ", ") + kernelPath;
+        }
+        std::vector<const char*> texts;
+        for (const std::string& source : sources) texts.push_back(source.c_str());
+        program = clCreateProgramWithSource(context, static_cast<cl_uint>(texts.size()), texts.data(), nullptr, &error);
         checkCL(error, "clCreateProgramWithSource");
         error = clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr); // OpenCL compile this program to the device - mac
         if (error != CL_SUCCESS) {
@@ -63,7 +71,7 @@ OpenCL::OpenCL(const std::string& kernelPath) {
             clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &size);
             std::string log(size, '\0');
             if (size) clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, size, log.data(), nullptr);
-            throw std::runtime_error("Could not build " + kernelPath + ": " + log);
+            throw std::runtime_error("Could not build " + names + ": " + log);
         }
     } catch (...) {
         release();

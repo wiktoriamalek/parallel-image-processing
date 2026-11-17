@@ -6,6 +6,7 @@
 #include <CL/cl.h>
 #endif
 #include <string>
+#include <vector>
 
 void checkCL(cl_int error, const char* operation);
 double kernelTimeUs(cl_event event);
@@ -13,6 +14,7 @@ double kernelTimeUs(cl_event event);
 class OpenCL {
 public:
     explicit OpenCL(const std::string& kernelPath);
+    explicit OpenCL(const std::vector<std::string>& kernelPaths);
     ~OpenCL();
     OpenCL(const OpenCL&) = delete;
     OpenCL& operator=(const OpenCL&) = delete;

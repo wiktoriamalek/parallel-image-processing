@@ -28,7 +28,7 @@
 #include <utility>
 
 namespace {
-const char* algorithmNames[] = {"Progowanie", "Negatyw", "Kontrast", "Otsu", "Multi-Otsu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
+const char* algorithmNames[] = {"Progowanie", "Negatyw", "Kontrast", "Otsu", "Multi-Otsu", "Doliny histogramu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
                                 "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru"};
 
 QImage toQImage(const Image& image) {
@@ -58,6 +58,15 @@ QWidget* parameterPage(std::initializer_list<std::pair<QString, QWidget*>> rows)
     return page;
 }
 
+QString thresholdsText(const Timing& timing) {
+    if (!timing.thresholds) return "–";
+    QStringList values;
+    for (int threshold : *timing.thresholds) values << QString::number(threshold);
+    QString text = values.isEmpty() ? "brak (1 klasa)" : values.join(", ");
+    if (timing.smoothingIterations >= 0) text += QString(" (iteracje: %1)").arg(timing.smoothingIterations);
+    return text;
+}
+
 QLabel* note(const QString& text) {
     auto* label = new QLabel(text);
     label->setWordWrap(true);
@@ -80,10 +89,12 @@ MainWindow::MainWindow() {
     imagesLayout->addWidget(outputView, 1, 1);
     imagesLayout->setRowStretch(1, 1);
 
-    table = new QTableWidget(0, 5);
+    table = new QTableWidget(0, 6);
     table->setHorizontalHeaderLabels({"Tryb", "Czas całkowity [ms]", "Same kernele GPU [ms]",
-                                      "Przyspieszenie względem CPU 1", "Wynik względem CPU 1"});
+                                      "Przyspieszenie względem CPU 1", "Wynik względem CPU 1", "Progi"});
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
     table->verticalHeader()->hide();
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -132,6 +143,9 @@ QWidget* MainWindow::createControls() {
     classesSpin->setValue(defaults.classes);
     zeroCopyCheck = new QCheckBox("GPU: zero-copy (pamięć wspólna z CPU)");
     zeroCopyCheck->setChecked(defaults.zeroCopy);
+    maxClassesSpin = new QSpinBox;
+    maxClassesSpin->setRange(2, 16);
+    maxClassesSpin->setValue(defaults.maxClasses);
     radiusSpin = new QSpinBox;
     radiusSpin->setRange(1, 50);
     radiusSpin->setValue(defaults.radius);
@@ -200,8 +214,11 @@ QWidget* MainWindow::createControls() {
         {"", note("Każdy piksel p zamienia się na (p − 128)·k + 128, obcięte do 0…255. "
                   "k > 1 zwiększa kontrast, k < 1 go zmniejsza, k < 0 odwraca jasność.")}}));
     parameterPages->addWidget(parameterPage({{"", note("Próg jest wyznaczany z histogramu, bez parametrów.")}}));
-    parameterPages->addWidget(parameterPage({{"Liczba klas", classesSpin}, {"", zeroCopyCheck},
+    parameterPages->addWidget(parameterPage({{"Liczba klas", classesSpin},
         {"", note("K klas to K − 1 progów wyznaczanych z histogramu.")}}));
+    parameterPages->addWidget(parameterPage({{"Maks. liczba klas", maxClassesSpin},
+        {"", note("Histogram jest wygładzany filtrem [1 2 1]/4, aż zostanie co najwyżej K szczytów. Progi to "
+                  "dna dolin między sąsiednimi szczytami, więc klas może wyjść mniej niż K.")}}));
     parameterPages->addWidget(parameterPage({{"Promień okna", radiusSpin}, {"Minimalny kontrast", contrastSpin}}));
     parameterPages->addWidget(parameterPage({{"Filtr", filterBox}}));
     parameterPages->addWidget(parameterPage({{"", sortingNetworkCheck}}));
@@ -241,8 +258,15 @@ QWidget* MainWindow::createControls() {
     modesLayout->addRow(cpu1Check);
     modesLayout->addRow(threadsRow);
     modesLayout->addRow(gpuCheck);
+    modesLayout->addRow(zeroCopyCheck);
     modesLayout->addRow("Powtórzenia", repeatsSpin);
     modesLayout->addRow(note("Czas to mediana z powtórzeń."));
+    auto updateZeroCopy = [this] {
+        Algorithm algorithm = currentAlgorithm();
+        zeroCopyCheck->setEnabled(algorithm == Algorithm::MultiOtsu || algorithm == Algorithm::PeaksValleys);
+    };
+    connect(algorithmBox, &QComboBox::currentIndexChanged, this, updateZeroCopy);
+    updateZeroCopy();
 
     runButton = new QPushButton("Uruchom");
     runButton->setEnabled(false);
@@ -359,7 +383,8 @@ void MainWindow::runFinished() {
             speedup = QString::number(reference->timing.totalUs / result.timing.totalUs, 'f', 2) + "×";
             comparison = difference(reference->output, result.output);
         }
-        QStringList cells = {result.name, milliseconds(result.timing.totalUs), kernel, speedup, comparison};
+        QStringList cells = {result.name, milliseconds(result.timing.totalUs), kernel, speedup, comparison,
+                             thresholdsText(result.timing)};
         for (int column = 0; column < cells.size(); ++column) {
             table->setItem(row, column, new QTableWidgetItem(cells[column]));
         }
@@ -403,6 +428,7 @@ Parameters MainWindow::currentParameters() const {
     parameters.contrastFactor = static_cast<float>(contrastFactorSpin->value());
     parameters.classes = classesSpin->value();
     parameters.zeroCopy = zeroCopyCheck->isChecked();
+    parameters.maxClasses = maxClassesSpin->value();
     parameters.radius = radiusSpin->value();
     parameters.minContrast = contrastSpin->value();
     parameters.filter = filterBox->currentIndex();

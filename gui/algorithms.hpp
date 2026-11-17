@@ -4,7 +4,8 @@
 #include <string>
 #include <vector>
 
-enum class Algorithm { Threshold, Negative, Contrast, Otsu, MultiOtsu, PeaksValleys, Bernsen, Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
+enum class Algorithm { Threshold, Negative, Contrast, Otsu, MultiOtsu, PeaksValleys, Bernsen, Niblack, Sauvola,
+                       Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
 enum class Mode { CPU1, CPUN, GPU, GPUZeroCopy };
 
 struct Parameters {
@@ -14,6 +15,7 @@ struct Parameters {
     int maxClasses = 3;
     int radius = 7;
     int minContrast = 15;
+    double localThresholdK = 0.2;
     int filter = 0;
     bool sortingNetwork = false;
     float k1 = 0.15f;

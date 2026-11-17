@@ -28,7 +28,8 @@
 #include <utility>
 
 namespace {
-const char* algorithmNames[] = {"Progowanie", "Negatyw", "Kontrast", "Otsu", "Multi-Otsu", "Doliny histogramu", "Bernsen", "Konwolucja 3×3", "Filtr medianowy 3×3",
+const char* algorithmNames[] = {"Progowanie", "Negatyw", "Kontrast", "Otsu", "Multi-Otsu", "Doliny histogramu",
+                                "Bernsen", "Niblack", "Sauvola", "Konwolucja 3×3", "Filtr medianowy 3×3",
                                 "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru"};
 
 QImage toQImage(const Image& image) {
@@ -99,7 +100,7 @@ MainWindow::MainWindow() {
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->setFixedHeight(130);
+    table->setFixedHeight(160);
     connect(table, &QTableWidget::currentCellChanged, this, [this](int row) { showResult(row); });
 
     auto* rightLayout = new QVBoxLayout;
@@ -141,8 +142,6 @@ QWidget* MainWindow::createControls() {
     classesSpin = new QSpinBox;
     classesSpin->setRange(2, 16);
     classesSpin->setValue(defaults.classes);
-    zeroCopyCheck = new QCheckBox("GPU: zero-copy (pamięć wspólna z CPU)");
-    zeroCopyCheck->setChecked(defaults.zeroCopy);
     maxClassesSpin = new QSpinBox;
     maxClassesSpin->setRange(2, 16);
     maxClassesSpin->setValue(defaults.maxClasses);
@@ -152,6 +151,13 @@ QWidget* MainWindow::createControls() {
     contrastSpin = new QSpinBox;
     contrastSpin->setRange(0, 255);
     contrastSpin->setValue(defaults.minContrast);
+    localRadiusSpin = new QSpinBox;
+    localRadiusSpin->setRange(radiusSpin->minimum(), radiusSpin->maximum());
+    localRadiusSpin->setValue(defaults.radius);
+    localThresholdKSpin = new QDoubleSpinBox;
+    localThresholdKSpin->setRange(0.0, 1.0);
+    localThresholdKSpin->setSingleStep(0.05);
+    localThresholdKSpin->setValue(defaults.localThresholdK);
     filterBox = new QComboBox;
     for (const auto& name : convolutionFilterNames()) filterBox->addItem(QString::fromStdString(name));
     sortingNetworkCheck = new QCheckBox("Sieć sortująca zamiast nth_element");
@@ -208,30 +214,40 @@ QWidget* MainWindow::createControls() {
     localTilesCheck->setChecked(defaults.localTiles);
 
     parameterPages = new QStackedWidget;
-    parameterPages->addWidget(parameterPage({{"Próg", thresholdSpin}}));
-    parameterPages->addWidget(parameterPage({{"", note("Każdy piksel p zamienia się na 255 − p, bez parametrów.")}}));
-    parameterPages->addWidget(parameterPage({{"Współczynnik k", contrastFactorSpin},
+    std::vector<int> algorithmPages;
+    auto addPage = [&](QWidget* page, int algorithms = 1) {
+        algorithmPages.insert(algorithmPages.end(), algorithms, parameterPages->addWidget(page));
+    };
+    addPage(parameterPage({{"Próg", thresholdSpin}}));
+    addPage(parameterPage({{"", note("Każdy piksel p zamienia się na 255 − p, bez parametrów.")}}));
+    addPage(parameterPage({{"Współczynnik k", contrastFactorSpin},
         {"", note("Każdy piksel p zamienia się na (p − 128)·k + 128, obcięte do 0…255. "
                   "k > 1 zwiększa kontrast, k < 1 go zmniejsza, k < 0 odwraca jasność.")}}));
-    parameterPages->addWidget(parameterPage({{"", note("Próg jest wyznaczany z histogramu, bez parametrów.")}}));
-    parameterPages->addWidget(parameterPage({{"Liczba klas", classesSpin},
+    addPage(parameterPage({{"", note("Próg jest wyznaczany z histogramu, bez parametrów.")}}));
+    addPage(parameterPage({{"Liczba klas", classesSpin},
         {"", note("K klas to K − 1 progów wyznaczanych z histogramu.")}}));
-    parameterPages->addWidget(parameterPage({{"Maks. liczba klas", maxClassesSpin},
+    addPage(parameterPage({{"Maks. liczba klas", maxClassesSpin},
         {"", note("Histogram jest wygładzany filtrem [1 2 1]/4, aż zostanie co najwyżej K szczytów. Progi to "
                   "dna dolin między sąsiednimi szczytami, więc klas może wyjść mniej niż K.")}}));
-    parameterPages->addWidget(parameterPage({{"Promień okna", radiusSpin}, {"Minimalny kontrast", contrastSpin}}));
-    parameterPages->addWidget(parameterPage({{"Filtr", filterBox}}));
-    parameterPages->addWidget(parameterPage({{"", sortingNetworkCheck}}));
-    parameterPages->addWidget(parameterPage({{"Model", distortionModelBox}, {"k1", k1Spin}, {"k2", k2Spin},
+    addPage(parameterPage({{"Promień okna", radiusSpin}, {"Minimalny kontrast", contrastSpin}}));
+    addPage(parameterPage({{"Promień okna", localRadiusSpin}, {"Współczynnik k", localThresholdKSpin},
+        {"", note("m i s to średnia i odchylenie standardowe jasności w oknie (2r + 1) × (2r + 1). Niblack: "
+                  "T = m − k·s, Sauvola: T = m·(1 + k·(s / 128 − 1)). Piksel jaśniejszy lub równy T staje się "
+                  "biały, ciemniejszy czarny. Zwykle k = 0,2 dla Niblacka i 0,2–0,5 dla Sauvoli.")}}), 2);
+    addPage(parameterPage({{"Filtr", filterBox}}));
+    addPage(parameterPage({{"", sortingNetworkCheck}}));
+    addPage(parameterPage({{"Model", distortionModelBox}, {"k1", k1Spin}, {"k2", k2Spin},
         {"k3", k3Spin}, {"p1", p1Spin}, {"p2", p2Spin},
         {"", note("Wczytaj zniekształcony obraz, np. z images/mitsubishi_distorted. Brown–Conrady dodaje "
                   "k3·r⁶ i dystorsję styczną p1, p2, tak jak w OpenCV.")}}));
-    parameterPages->addWidget(parameterPage({{"Interpolacja", interpolationBox}, {"Skala", scaleSpin}}));
-    parameterPages->addWidget(parameterPage({{"Ziarno x", seedXSpin}, {"Ziarno y", seedYSpin}, {"Tolerancja", toleranceSpin},
+    addPage(parameterPage({{"Interpolacja", interpolationBox}, {"Skala", scaleSpin}}));
+    addPage(parameterPage({{"Ziarno x", seedXSpin}, {"Ziarno y", seedYSpin}, {"Tolerancja", toleranceSpin},
         {"", localTilesCheck},
         {"", note("Kliknij obraz wejściowy, żeby wybrać ziarno. Bez kafelków GPU dokłada 1 piksel na iterację, "
                   "więc duży obszar liczy się nawet sekundy.")}}));
-    connect(algorithmBox, &QComboBox::currentIndexChanged, parameterPages, &QStackedWidget::setCurrentIndex);
+    connect(algorithmBox, &QComboBox::currentIndexChanged, this, [this, algorithmPages](int index) {
+        parameterPages->setCurrentIndex(algorithmPages.at(index));
+    });
     connect(algorithmBox, &QComboBox::currentIndexChanged, this, &MainWindow::updateSeedMarker);
 
     auto* algorithmGroup = new QGroupBox("Algorytm");
@@ -242,7 +258,8 @@ QWidget* MainWindow::createControls() {
     cpu1Check = new QCheckBox("CPU, 1 wątek");
     cpuNCheck = new QCheckBox("CPU, wątków:");
     gpuCheck = new QCheckBox("GPU (OpenCL)");
-    for (auto* check : {cpu1Check, cpuNCheck, gpuCheck}) check->setChecked(true);
+    gpuZeroCopyCheck = new QCheckBox("GPU (OpenCL), zero-copy");
+    for (auto* check : {cpu1Check, cpuNCheck, gpuCheck, gpuZeroCopyCheck}) check->setChecked(true);
     threadsSpin = new QSpinBox;
     threadsSpin->setRange(2, 256);
     threadsSpin->setValue(std::max(2u, std::thread::hardware_concurrency()));
@@ -258,13 +275,12 @@ QWidget* MainWindow::createControls() {
     modesLayout->addRow(cpu1Check);
     modesLayout->addRow(threadsRow);
     modesLayout->addRow(gpuCheck);
-    modesLayout->addRow(zeroCopyCheck);
+    modesLayout->addRow(gpuZeroCopyCheck);
     modesLayout->addRow("Powtórzenia", repeatsSpin);
-    modesLayout->addRow(note("Czas to mediana z powtórzeń."));
-    auto updateZeroCopy = [this] {
-        Algorithm algorithm = currentAlgorithm();
-        zeroCopyCheck->setEnabled(algorithm == Algorithm::MultiOtsu || algorithm == Algorithm::PeaksValleys);
-    };
+    modesLayout->addRow(note("Czas to mediana z powtórzeń. Zero-copy to te same kernele OpenCL, ale bez kopiowania "
+                             "obrazu na GPU i z powrotem, bo CPU i GPU mają wspólną pamięć. Dostępne dla "
+                             "Multi-Otsu i dolin histogramu."));
+    auto updateZeroCopy = [this] { gpuZeroCopyCheck->setEnabled(supportsZeroCopy(currentAlgorithm())); };
     connect(algorithmBox, &QComboBox::currentIndexChanged, this, updateZeroCopy);
     updateZeroCopy();
 
@@ -338,6 +354,9 @@ void MainWindow::run() {
         modes.emplace_back(Mode::CPUN, QString("CPU, %1 wątków").arg(threadsSpin->value()));
     }
     if (gpuCheck->isChecked()) modes.emplace_back(Mode::GPU, "GPU");
+    if (gpuZeroCopyCheck->isChecked() && gpuZeroCopyCheck->isEnabled()) {
+        modes.emplace_back(Mode::GPUZeroCopy, "GPU, zero-copy");
+    }
     if (modes.empty()) {
         statusBar()->showMessage("Zaznacz co najmniej jeden tryb");
         return;
@@ -427,10 +446,10 @@ Parameters MainWindow::currentParameters() const {
     parameters.threshold = thresholdSpin->value();
     parameters.contrastFactor = static_cast<float>(contrastFactorSpin->value());
     parameters.classes = classesSpin->value();
-    parameters.zeroCopy = zeroCopyCheck->isChecked();
     parameters.maxClasses = maxClassesSpin->value();
-    parameters.radius = radiusSpin->value();
+    parameters.radius = currentAlgorithm() == Algorithm::Bernsen ? radiusSpin->value() : localRadiusSpin->value();
     parameters.minContrast = contrastSpin->value();
+    parameters.localThresholdK = localThresholdKSpin->value();
     parameters.filter = filterBox->currentIndex();
     parameters.sortingNetwork = sortingNetworkCheck->isChecked();
     parameters.k1 = static_cast<float>(k1Spin->value());

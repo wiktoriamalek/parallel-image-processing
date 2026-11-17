@@ -65,10 +65,11 @@ private:
     QSpinBox* thresholdSpin;
     QDoubleSpinBox* contrastFactorSpin;
     QSpinBox* classesSpin;
-    QCheckBox* zeroCopyCheck;
     QSpinBox* maxClassesSpin;
     QSpinBox* radiusSpin;
     QSpinBox* contrastSpin;
+    QSpinBox* localRadiusSpin;
+    QDoubleSpinBox* localThresholdKSpin;
     QComboBox* filterBox;
     QCheckBox* sortingNetworkCheck;
     QComboBox* distortionModelBox;
@@ -86,6 +87,7 @@ private:
     QCheckBox* cpu1Check;
     QCheckBox* cpuNCheck;
     QCheckBox* gpuCheck;
+    QCheckBox* gpuZeroCopyCheck;
     QSpinBox* threadsSpin;
     QSpinBox* repeatsSpin;
 };

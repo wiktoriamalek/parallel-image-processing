@@ -66,6 +66,14 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return {measure([&] {
                 bernsenThreshold(image, output, parameters.radius, parameters.minContrast, threads);
             }, repeats)};
+        case Algorithm::Niblack:
+            return {measure([&] {
+                niblackThreshold(image, output, parameters.radius, parameters.localThresholdK, threads);
+            }, repeats)};
+        case Algorithm::Sauvola:
+            return {measure([&] {
+                sauvolaThreshold(image, output, parameters.radius, parameters.localThresholdK, threads);
+            }, repeats)};
         case Algorithm::Convolution: {
             const ConvolutionFilter& selected = convolutionFilters().at(parameters.filter);
             return {measure([&] {
@@ -204,6 +212,14 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return runPeaksValleysGPU(image, parameters, zeroCopy, repeats, output);
         case Algorithm::Bernsen: {
             BernsenGPU gpu(image, parameters.radius, parameters.minContrast);
+            return measureGPU(gpu, image, repeats, output);
+        }
+        case Algorithm::Niblack: {
+            LocalThresholdGPU gpu(image, LocalThresholdMethod::Niblack, parameters.radius, parameters.localThresholdK);
+            return measureGPU(gpu, image, repeats, output);
+        }
+        case Algorithm::Sauvola: {
+            LocalThresholdGPU gpu(image, LocalThresholdMethod::Sauvola, parameters.radius, parameters.localThresholdK);
             return measureGPU(gpu, image, repeats, output);
         }
         case Algorithm::Convolution: {

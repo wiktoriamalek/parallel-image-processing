@@ -325,9 +325,10 @@ void bernsenRowRange(const Image& image, Image& result, int radius, int minContr
 void bernsenThreshold(const Image &image, Image &result, int radius, int minContrast, int threads) {
     if (radius < 0) throw std::invalid_argument("Window radius must be non-negative");
     if (result.pixels.size() != image.pixels.size()) throw std::runtime_error("Output image size does not match the input");
-    parallelRanges(image.height, threads, [&](std::size_t begin, std::size_t end, int) {
-        BernsenScratch scratch;
-        bernsenRowRange(image, result, radius, minContrast, static_cast<int>(begin), static_cast<int>(end), scratch);
+    if (threads <= 0) throw std::invalid_argument("Thread count must be positive");
+    std::vector<BernsenScratch> scratch(threads);
+    parallelRanges(image.height, threads, [&](std::size_t begin, std::size_t end, int thread) {
+        bernsenRowRange(image, result, radius, minContrast, static_cast<int>(begin), static_cast<int>(end), scratch[thread]);
     });
 }
 

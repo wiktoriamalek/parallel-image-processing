@@ -7,6 +7,7 @@
 #include "median_filter.hpp"
 #include "negative.hpp"
 #include "otsu.hpp"
+#include "parallel_utils.hpp"
 #include "peaks_valleys_detection.hpp"
 #include "region_growing.hpp"
 #include "resize.hpp"
@@ -289,6 +290,10 @@ Timing runAlgorithm(Algorithm algorithm, Mode mode, const Image& image, const Pa
     }
     if (mode == Mode::GPU || mode == Mode::GPUZeroCopy) {
         return runGPU(algorithm, image, parameters, mode == Mode::GPUZeroCopy, repeats, output);
+    }
+    if (mode == Mode::CPUNDynamic) {
+        ScopedParallelSettings dynamic({Schedule::Dynamic, 8, nullptr});
+        return runCPU(algorithm, image, parameters, threads, repeats, output);
     }
     return runCPU(algorithm, image, parameters, mode == Mode::CPU1 ? 1 : threads, repeats, output);
 }

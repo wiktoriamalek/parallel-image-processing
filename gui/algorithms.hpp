@@ -6,7 +6,7 @@
 
 enum class Algorithm { Threshold, Negative, Contrast, Otsu, MultiOtsu, PeaksValleys, Bernsen, Niblack, Sauvola,
                        Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
-enum class Mode { CPU1, CPUN, GPU, GPUZeroCopy };
+enum class Mode { CPU1, CPUN, CPUNDynamic, GPU, GPUZeroCopy };
 
 struct Parameters {
     int threshold = 128;

@@ -100,7 +100,7 @@ MainWindow::MainWindow() {
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->setFixedHeight(160);
+    table->setFixedHeight(190);
     connect(table, &QTableWidget::currentCellChanged, this, [this](int row) { showResult(row); });
 
     auto* rightLayout = new QVBoxLayout;
@@ -257,9 +257,10 @@ QWidget* MainWindow::createControls() {
 
     cpu1Check = new QCheckBox("CPU, 1 wątek");
     cpuNCheck = new QCheckBox("CPU, wątków:");
+    cpuDynamicCheck = new QCheckBox("CPU, podział dynamiczny");
     gpuCheck = new QCheckBox("GPU (OpenCL)");
     gpuZeroCopyCheck = new QCheckBox("GPU (OpenCL), zero-copy");
-    for (auto* check : {cpu1Check, cpuNCheck, gpuCheck, gpuZeroCopyCheck}) check->setChecked(true);
+    for (auto* check : {cpu1Check, cpuNCheck, cpuDynamicCheck, gpuCheck, gpuZeroCopyCheck}) check->setChecked(true);
     threadsSpin = new QSpinBox;
     threadsSpin->setRange(2, 256);
     threadsSpin->setValue(std::max(2u, std::thread::hardware_concurrency()));
@@ -274,12 +275,13 @@ QWidget* MainWindow::createControls() {
     auto* modesLayout = new QFormLayout(modesGroup);
     modesLayout->addRow(cpu1Check);
     modesLayout->addRow(threadsRow);
+    modesLayout->addRow(cpuDynamicCheck);
     modesLayout->addRow(gpuCheck);
     modesLayout->addRow(gpuZeroCopyCheck);
     modesLayout->addRow("Powtórzenia", repeatsSpin);
-    modesLayout->addRow(note("Czas to mediana z powtórzeń. Zero-copy to te same kernele OpenCL, ale bez kopiowania "
-                             "obrazu na GPU i z powrotem, bo CPU i GPU mają wspólną pamięć. Dostępne dla "
-                             "Multi-Otsu i dolin histogramu."));
+    modesLayout->addRow(note("Czas to mediana z powtórzeń. Podział dynamiczny: tyle samo wątków, ale pobierają "
+                             "małe kawałki obrazu, więc rdzenie wydajne robią więcej. Zero-copy: te same kernele "
+                             "bez kopiowania obrazu (wspólna pamięć CPU i GPU), dla Multi-Otsu i dolin."));
     auto updateZeroCopy = [this] { gpuZeroCopyCheck->setEnabled(supportsZeroCopy(currentAlgorithm())); };
     connect(algorithmBox, &QComboBox::currentIndexChanged, this, updateZeroCopy);
     updateZeroCopy();
@@ -352,6 +354,9 @@ void MainWindow::run() {
     if (cpu1Check->isChecked()) modes.emplace_back(Mode::CPU1, "CPU, 1 wątek");
     if (cpuNCheck->isChecked()) {
         modes.emplace_back(Mode::CPUN, QString("CPU, %1 wątków").arg(threadsSpin->value()));
+    }
+    if (cpuDynamicCheck->isChecked()) {
+        modes.emplace_back(Mode::CPUNDynamic, QString("CPU, %1 wątków, dynamiczny").arg(threadsSpin->value()));
     }
     if (gpuCheck->isChecked()) modes.emplace_back(Mode::GPU, "GPU");
     if (gpuZeroCopyCheck->isChecked() && gpuZeroCopyCheck->isEnabled()) {

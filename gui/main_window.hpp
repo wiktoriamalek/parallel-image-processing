@@ -86,6 +86,7 @@ private:
     QCheckBox* localTilesCheck;
     QCheckBox* cpu1Check;
     QCheckBox* cpuNCheck;
+    QCheckBox* cpuDynamicCheck;
     QCheckBox* gpuCheck;
     QCheckBox* gpuZeroCopyCheck;
     QSpinBox* threadsSpin;

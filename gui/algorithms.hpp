@@ -17,7 +17,10 @@ struct Parameters {
     int minContrast = 15;
     double localThresholdK = 0.2;
     int filter = 0;
-    bool sortingNetwork = false;
+    int medianSort = 0;
+    int medianRadius = 1;
+    int medianStrip = 8;
+    bool medianSwitching = false;
     float k1 = 0.15f;
     float k2 = 0.0f;
     int distortionModel = 0;

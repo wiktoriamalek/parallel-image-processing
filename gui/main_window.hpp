@@ -71,7 +71,10 @@ private:
     QSpinBox* localRadiusSpin;
     QDoubleSpinBox* localThresholdKSpin;
     QComboBox* filterBox;
-    QCheckBox* sortingNetworkCheck;
+    QComboBox* medianSortBox;
+    QComboBox* medianWindowBox;
+    QSpinBox* medianStripSpin;
+    QCheckBox* medianSwitchingCheck;
     QComboBox* distortionModelBox;
     QDoubleSpinBox* k1Spin;
     QDoubleSpinBox* k2Spin;

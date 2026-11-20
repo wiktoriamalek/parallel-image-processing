@@ -7,80 +7,6 @@
 #include <stdexcept>
 #include "parallel_utils.hpp"
 
-Image medianFilter(const Image& image) {
-    Image result = image;
-    medianFilterRows(image, result, 1, image.height-1);
-    return result;
-}
-
-void compareSwap(unsigned char& a, unsigned char& b) {
-    if (a > b) std::swap(a, b);
-}
-
-unsigned char medianOf9(std::array<unsigned char, 9>& p) {
-    compareSwap(p[1], p[2]);
-    compareSwap(p[4], p[5]);
-    compareSwap(p[7], p[8]);
-
-    compareSwap(p[0], p[1]);
-    compareSwap(p[3], p[4]);
-    compareSwap(p[6], p[7]);
-
-    compareSwap(p[1], p[2]);
-    compareSwap(p[4], p[5]);
-    compareSwap(p[7], p[8]);
-
-    compareSwap(p[0], p[3]);
-    compareSwap(p[5], p[8]);
-    compareSwap(p[4], p[7]);
-    compareSwap(p[3], p[6]);
-
-    compareSwap(p[1], p[4]);
-    compareSwap(p[2], p[5]);
-    compareSwap(p[4], p[7]);
-
-    compareSwap(p[4], p[2]);
-    compareSwap(p[6], p[4]);
-    compareSwap(p[4], p[2]);
-
-    return p[4];
-}
-
-// x = columns, y = rows
-void medianFilterRows(const Image& image, Image& result, int firstRow, int endRow, bool sortingNetwork) {
-    for (int y = firstRow; y < endRow; y++) {
-        for (int x = 1; x < image.width - 1; x++) {
-            std::array<unsigned char, 9> neighbours;
-            int index = 0;
-            for (int ky = -1; ky <= 1; ky++) {
-                for (int kx = -1; kx <= 1; kx++) {
-                    int neighbourX = x + kx;
-                    int neighbourY = y + ky;
-                    std::size_t neighbourIndex = neighbourY * image.width + neighbourX;
-                    neighbours[index] = image.pixels[neighbourIndex];
-                    index++;
-                }
-            }
-            if (sortingNetwork) {
-                medianOf9(neighbours);
-            }
-            else {
-                std::nth_element(neighbours.begin(), neighbours.begin() + 4, neighbours.end());
-            }
-            std::size_t resultIndex = y * image.width + x;
-            result.pixels[resultIndex] = neighbours[4];
-        }
-    }
-}
-
-void medianFilterParallel(const Image& image, Image& result, int threads, bool sortingNetwork) {
-    parallelRanges(std::max(0, image.height - 2), threads,
-    [&](std::size_t begin, std::size_t end, int) {
-        medianFilterRows(image, result, static_cast<int>(begin) + 1, static_cast<int>(end) + 1, sortingNetwork);
-    });
-
-}
-
 namespace {
 using Operation = MedianNetwork::Operation;
 
@@ -331,8 +257,12 @@ void executeSteps(const std::vector<MedianNetwork::Step>& steps, std::vector<Lan
     }
 }
 
+bool isImpulse(unsigned char pixel) {
+    return pixel == 0 || pixel == 255;
+}
+
 void medianNetworkStrips(const Image& image, Image& result, const MedianNetwork& network,
-                         std::size_t firstStrip, std::size_t endStrip) {
+                         std::size_t firstStrip, std::size_t endStrip, bool switching) {
     const int radius = network.radius;
     const int size = network.size();
     const int rows = network.strip + 2 * radius;
@@ -358,26 +288,38 @@ void medianNetworkStrips(const Image& image, Image& result, const MedianNetwork&
             }
             executeSteps(network.layeredSteps, v);
             for (int j = 0; j < network.strip && y0 + j < image.height - radius; ++j) {
-                std::memcpy(result.pixels.data() + static_cast<std::size_t>(y0 + j) * image.width + x,
-                            v[network.outputs[j]].data(), static_cast<std::size_t>(lanes));
+                const std::size_t offset = static_cast<std::size_t>(y0 + j) * image.width + x;
+                const Lanes& median = v[network.outputs[j]];
+                unsigned char* target = result.pixels.data() + offset;
+                if (!switching) {
+                    std::memcpy(target, median.data(), static_cast<std::size_t>(lanes));
+                    continue;
+                }
+                const unsigned char* pixels = image.pixels.data() + offset;
+                for (int i = 0; i < lanes; ++i) target[i] = isImpulse(pixels[i]) ? median[i] : pixels[i];
             }
         }
     }
 }
 
-void medianStandardRows(const Image& image, Image& result, int radius, int firstRow, int endRow) {
+void medianStandardRows(const Image& image, Image& result, int radius, int firstRow, int endRow, bool switching) {
     const int size = 2 * radius + 1;
     std::vector<unsigned char> window(static_cast<std::size_t>(size) * size);
     const auto middle = window.begin() + static_cast<std::ptrdiff_t>(window.size() / 2);
     for (int y = firstRow; y < endRow; ++y) {
         for (int x = radius; x < image.width - radius; ++x) {
+            const std::size_t pixelIndex = static_cast<std::size_t>(y) * image.width + x;
+            if (switching && !isImpulse(image.pixels[pixelIndex])) {
+                result.pixels[pixelIndex] = image.pixels[pixelIndex];
+                continue;
+            }
             std::size_t index = 0;
             for (int ky = -radius; ky <= radius; ++ky) {
                 const unsigned char* row = image.pixels.data() + static_cast<std::size_t>(y + ky) * image.width + x;
                 for (int kx = -radius; kx <= radius; ++kx) window[index++] = row[kx];
             }
             std::nth_element(window.begin(), middle, window.end());
-            result.pixels[static_cast<std::size_t>(y) * image.width + x] = *middle;
+            result.pixels[pixelIndex] = *middle;
         }
     }
 }
@@ -456,7 +398,6 @@ MedianNetwork buildMedianNetwork(MedianSort sort, int radius, int strip) {
     if (strip < 1) throw std::invalid_argument("Strip must be at least 1");
     if (sort != MedianSort::Shared && strip != 1) throw std::invalid_argument("Only the shared median processes a strip of rows");
     MedianNetwork network;
-    network.sort = sort;
     network.radius = radius;
     network.strip = strip;
     if (sort == MedianSort::Bitonic) {
@@ -472,72 +413,55 @@ MedianNetwork buildMedianNetwork(MedianSort sort, int radius, int strip) {
     return network;
 }
 
-void medianFilterParallel(const Image& image, Image& result, int threads, MedianSort sort, int radius, int strip) {
+void medianFilterParallel(const Image& image, Image& result, int threads, MedianSort sort, int radius, int strip,
+                          bool switching) {
     if (sort != MedianSort::Standard) {
-        medianFilterParallel(image, result, threads, buildMedianNetwork(sort, radius, strip));
+        medianFilterParallel(image, result, threads, buildMedianNetwork(sort, radius, strip), switching);
         return;
     }
     if (radius < 1) throw std::invalid_argument("Median radius must be at least 1");
     if (strip != 1) throw std::invalid_argument("Only the shared median processes a strip of rows");
     if (result.pixels.size() != image.pixels.size()) throw std::invalid_argument("Result must have the size of the image");
     parallelRanges(std::max(0, image.height - 2 * radius), threads, [&](std::size_t begin, std::size_t end, int) {
-        medianStandardRows(image, result, radius, static_cast<int>(begin) + radius, static_cast<int>(end) + radius);
+        medianStandardRows(image, result, radius, static_cast<int>(begin) + radius, static_cast<int>(end) + radius, switching);
     });
 }
 
-void medianFilterParallel(const Image& image, Image& result, int threads, const MedianNetwork& network) {
+void medianFilterParallel(const Image& image, Image& result, int threads, const MedianNetwork& network, bool switching) {
     if (result.pixels.size() != image.pixels.size()) throw std::invalid_argument("Result must have the size of the image");
     const int interiorRows = image.height - 2 * network.radius;
     if (image.width <= 2 * network.radius || interiorRows <= 0) return;
     const std::size_t strips = static_cast<std::size_t>((interiorRows + network.strip - 1) / network.strip);
     parallelRanges(strips, threads, [&](std::size_t begin, std::size_t end, int) {
-        medianNetworkStrips(image, result, network, begin, end);
+        medianNetworkStrips(image, result, network, begin, end, switching);
     });
 }
 
-MedianFilterGPU::MedianFilterGPU(const Image& image, bool sortingNetwork)
-    : cl("kernels/median_filter.cl"),
-      bufferSize(image.pixels.size()),
-      width(image.width),
-      height(image.height),
-      globalWorkSize{static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)} {
-    cl_int network = sortingNetwork;
-    try {
-        createBuffers("median_filter3x3");
-        checkCL(clSetKernelArg(kernel, 4, sizeof(cl_int), &network), "clSetKernelArg");
-    } catch (...) {
-        release();
-        throw;
-    }
-}
-
-MedianFilterGPU::MedianFilterGPU(const Image& image, MedianSort sort, int radius, int strip)
+MedianFilterGPU::MedianFilterGPU(const Image& image, MedianSort sort, int radius, int strip, bool switching)
     : cl("kernels/median_filter.cl", medianProgramPrefix(sort, radius, strip)),
       bufferSize(image.pixels.size()),
       width(image.width),
       height(image.height),
       globalWorkSize{static_cast<std::size_t>(image.width),
                      static_cast<std::size_t>((image.height + strip - 1) / strip)} {
+    const cl_int replaceOnlyImpulses = switching;
     try {
-        createBuffers(sort == MedianSort::Standard ? "median_insertion" : "median_network");
+        cl_int error;
+        inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer input");
+        outputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, bufferSize, nullptr, &error);
+        checkCL(error, "clCreateBuffer output");
+        kernel = clCreateKernel(cl.program, sort == MedianSort::Standard ? "median_insertion" : "median_network", &error);
+        checkCL(error, "clCreateKernel");
+        checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 2, sizeof(cl_int), &width), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 3, sizeof(cl_int), &height), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 4, sizeof(cl_int), &replaceOnlyImpulses), "clSetKernelArg");
     } catch (...) {
         release();
         throw;
     }
-}
-
-void MedianFilterGPU::createBuffers(const char* kernelName) {
-    cl_int error;
-    inputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY, bufferSize, nullptr, &error);
-    checkCL(error, "clCreateBuffer input");
-    outputBuffer = clCreateBuffer(cl.context, CL_MEM_READ_WRITE, bufferSize, nullptr, &error);
-    checkCL(error, "clCreateBuffer output");
-    kernel = clCreateKernel(cl.program, kernelName, &error);
-    checkCL(error, "clCreateKernel");
-    checkCL(clSetKernelArg(kernel, 0, sizeof(cl_mem), &inputBuffer), "clSetKernelArg");
-    checkCL(clSetKernelArg(kernel, 1, sizeof(cl_mem), &outputBuffer), "clSetKernelArg");
-    checkCL(clSetKernelArg(kernel, 2, sizeof(cl_int), &width), "clSetKernelArg");
-    checkCL(clSetKernelArg(kernel, 3, sizeof(cl_int), &height), "clSetKernelArg");
 }
 
 void MedianFilterGPU::release() {

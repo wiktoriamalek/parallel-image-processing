@@ -1,0 +1,6 @@
+,comparators_per_pixel,comparators_per_pixel,comparators_per_pixel,min_max_per_pixel,min_max_per_pixel,min_max_per_pixel
+sort,bitonic,network,shared,bitonic,network,shared
+window,,,,,,
+3×3,80.0,23.0,14.75,56.0,34.0,18.5
+5×5,240.0,122.0,54.5,258.0,188.0,70.0
+7×7,672.0,369.0,121.25,754.0,570.0,161.0

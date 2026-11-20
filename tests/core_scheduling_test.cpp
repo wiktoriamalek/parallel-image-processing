@@ -28,7 +28,9 @@ const std::vector<Algorithm>& algorithms() {
     static const std::vector<Algorithm> all = {
         {"bernsen", [](const Image& image, Image& output, int threads) { bernsenThreshold(image, output, 7, 15, threads); }},
         {"niblack", [](const Image& image, Image& output, int threads) { niblackThreshold(image, output, 7, 0.2, threads); }},
-        {"median_filter", [](const Image& image, Image& output, int threads) { medianFilterParallel(image, output, threads); }},
+        {"median_filter", [](const Image& image, Image& output, int threads) {
+            medianFilterParallel(image, output, threads, MedianSort::Standard, 1);
+        }},
         {"contrast", [](const Image& image, Image& output, int threads) { contrastParallel(image, output, threads, 2.0f); }},
     };
     return all;

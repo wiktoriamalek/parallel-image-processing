@@ -1,6 +1,7 @@
 #include "main_window.hpp"
 #include "image_io.hpp"
 #include "image_view.hpp"
+#include "median_filter.hpp"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -29,7 +30,7 @@
 
 namespace {
 const char* algorithmNames[] = {"Progowanie", "Negatyw", "Kontrast", "Otsu", "Multi-Otsu", "Doliny histogramu",
-                                "Bernsen", "Niblack", "Sauvola", "Konwolucja 3×3", "Filtr medianowy 3×3",
+                                "Bernsen", "Niblack", "Sauvola", "Konwolucja 3×3", "Filtr medianowy",
                                 "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru", "Canny (krawędzie)"};
 
 QImage toQImage(const Image& image) {
@@ -160,8 +161,24 @@ QWidget* MainWindow::createControls() {
     localThresholdKSpin->setValue(defaults.localThresholdK);
     filterBox = new QComboBox;
     for (const auto& name : convolutionFilterNames()) filterBox->addItem(QString::fromStdString(name));
-    sortingNetworkCheck = new QCheckBox("Sieć sortująca zamiast nth_element");
-    sortingNetworkCheck->setChecked(defaults.sortingNetwork);
+    medianSortBox = new QComboBox;
+    medianSortBox->addItems({"Sortowanie", "Sieć, jedno okno", "Sieć bitoniczna", "Sieć współdzielona"});
+    medianSortBox->setCurrentIndex(defaults.medianSort);
+    medianWindowBox = new QComboBox;
+    for (int radius = 1; radius <= 7; ++radius) medianWindowBox->addItem(QString("%1 × %1").arg(2 * radius + 1));
+    medianWindowBox->setCurrentIndex(defaults.medianRadius - 1);
+    medianStripSpin = new QSpinBox;
+    medianStripSpin->setRange(1, 32);
+    medianStripSpin->setValue(defaults.medianStrip);
+    medianSwitchingCheck = new QCheckBox("Mediana przełączająca");
+    medianSwitchingCheck->setChecked(defaults.medianSwitching);
+    connect(medianSortBox, &QComboBox::currentIndexChanged, this, [this](int sort) {
+        medianStripSpin->setEnabled(static_cast<MedianSort>(sort) == MedianSort::Shared);
+    });
+    connect(medianWindowBox, &QComboBox::currentIndexChanged, this, [this](int index) {
+        medianStripSpin->setValue(index == 0 ? 8 : 16);
+    });
+    medianStripSpin->setEnabled(static_cast<MedianSort>(defaults.medianSort) == MedianSort::Shared);
     k1Spin = new QDoubleSpinBox;
     k2Spin = new QDoubleSpinBox;
     for (auto* spin : {k1Spin, k2Spin}) {
@@ -244,7 +261,12 @@ QWidget* MainWindow::createControls() {
                   "T = m − k·s, Sauvola: T = m·(1 + k·(s / 128 − 1)). Piksel jaśniejszy lub równy T staje się "
                   "biały, ciemniejszy czarny. Zwykle k = 0,2 dla Niblacka i 0,2–0,5 dla Sauvoli.")}}), 2);
     addPage(parameterPage({{"Filtr", filterBox}}));
-    addPage(parameterPage({{"", sortingNetworkCheck}}));
+    addPage(parameterPage({{"Wariant", medianSortBox}, {"Okno", medianWindowBox},
+        {"Okien na work-item", medianStripSpin}, {"", medianSwitchingCheck},
+        {"", note("Sortowanie: nth_element na CPU, przez wstawianie na GPU. Sieci porównują i zamieniają piksele "
+                  "zawsze w tej samej kolejności, bez rozgałęzień. Sieć współdzielona liczy pas sąsiednich okien "
+                  "w pionie i raz sortuje wspólne wiersze. Mediana przełączająca zmienia tylko piksele 0 i 255 "
+                  "(szum sól i pieprz), resztę zostawia.")}}));
     addPage(parameterPage({{"Model", distortionModelBox}, {"k1", k1Spin}, {"k2", k2Spin},
         {"k3", k3Spin}, {"p1", p1Spin}, {"p2", p2Spin},
         {"", note("Wczytaj zniekształcony obraz, np. z images/mitsubishi_distorted. Brown–Conrady dodaje "
@@ -469,7 +491,10 @@ Parameters MainWindow::currentParameters() const {
     parameters.minContrast = contrastSpin->value();
     parameters.localThresholdK = localThresholdKSpin->value();
     parameters.filter = filterBox->currentIndex();
-    parameters.sortingNetwork = sortingNetworkCheck->isChecked();
+    parameters.medianSort = medianSortBox->currentIndex();
+    parameters.medianRadius = medianWindowBox->currentIndex() + 1;
+    parameters.medianStrip = medianStripSpin->value();
+    parameters.medianSwitching = medianSwitchingCheck->isChecked();
     parameters.k1 = static_cast<float>(k1Spin->value());
     parameters.k2 = static_cast<float>(k2Spin->value());
     parameters.distortionModel = distortionModelBox->currentIndex();

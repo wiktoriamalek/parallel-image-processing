@@ -1,111 +1,8 @@
-// the smaller value goes to a, the bigger one to b - min and max instead of if, so every work-item runs the same instructions
-void compareSwap(unsigned char* a, unsigned char* b)
-{
-    unsigned char low = min(*a, *b);
-    *b = max(*a, *b);
-    *a = low;
-}
-
-__kernel void median_filter3x3(__global const unsigned char* input, __global unsigned char* output, int width, int height, int sortingNetwork)
-{
-    // __global is a pointer to a global memory of a device
-
-    int x = get_global_id(0);
-    int y = get_global_id(1);
-
-    if (x>=width || y>=height){
-        return;
-    }
-
-    int pixelIndex = y * width + x;
-
-    if (x==0 || x==width-1 || y==0 || y==height-1 )
-    {
-     output[pixelIndex] = input[pixelIndex];
-     return;
-    }
-
-    unsigned char neighbours[9];
-    int index = 0;
-    for (int ky = -1; ky <= 1; ky++) {
-        for (int kx = -1; kx <= 1; kx++) {
-            int neighbourX = x + kx;
-            int neighbourY = y + ky;
-            int neighbourIndex = neighbourY * width + neighbourX;
-            neighbours[index] = input[neighbourIndex];
-            index++;
-        }
-    }
-
-    if (sortingNetwork) {
-        // the same 19 comparisons as medianOf9 in src/median_filter.cpp, the median ends up in neighbours[4]
-        compareSwap(&neighbours[1], &neighbours[2]);
-        compareSwap(&neighbours[4], &neighbours[5]);
-        compareSwap(&neighbours[7], &neighbours[8]);
-
-        compareSwap(&neighbours[0], &neighbours[1]);
-        compareSwap(&neighbours[3], &neighbours[4]);
-        compareSwap(&neighbours[6], &neighbours[7]);
-
-        compareSwap(&neighbours[1], &neighbours[2]);
-        compareSwap(&neighbours[4], &neighbours[5]);
-        compareSwap(&neighbours[7], &neighbours[8]);
-
-        compareSwap(&neighbours[0], &neighbours[3]);
-        compareSwap(&neighbours[5], &neighbours[8]);
-        compareSwap(&neighbours[4], &neighbours[7]);
-        compareSwap(&neighbours[3], &neighbours[6]);
-
-        compareSwap(&neighbours[1], &neighbours[4]);
-        compareSwap(&neighbours[2], &neighbours[5]);
-        compareSwap(&neighbours[4], &neighbours[7]);
-
-        compareSwap(&neighbours[4], &neighbours[2]);
-        compareSwap(&neighbours[6], &neighbours[4]);
-        compareSwap(&neighbours[4], &neighbours[2]);
-    }
-    else {
-        for (int i = 1; i < 9; i++) {
-            unsigned char value = neighbours[i];
-            int j = i - 1;
-            while (j >= 0 && neighbours[j] > value) {
-                neighbours[j + 1] = neighbours[j];
-                j--;
-                }
-            neighbours[j + 1] = value;
-        }
-    }
-
-    output[pixelIndex] = neighbours[4];
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-}
-
 #ifdef MEDIAN_RADIUS
 #define MEDIAN_SIZE (2 * MEDIAN_RADIUS + 1)
 #define MEDIAN_AREA (MEDIAN_SIZE * MEDIAN_SIZE)
 
-__kernel void median_insertion(__global const uchar* input, __global uchar* output, int width, int height)
+__kernel void median_insertion(__global const uchar* input, __global uchar* output, int width, int height, int switching)
 {
     const int x = get_global_id(0);
     const int y = get_global_id(1);
@@ -113,8 +10,10 @@ __kernel void median_insertion(__global const uchar* input, __global uchar* outp
         return;
     }
     const size_t index = (size_t)y * width + x;
-    if (x < MEDIAN_RADIUS || x >= width - MEDIAN_RADIUS || y < MEDIAN_RADIUS || y >= height - MEDIAN_RADIUS) {
-        output[index] = input[index];
+    const uchar pixel = input[index];
+    if (x < MEDIAN_RADIUS || x >= width - MEDIAN_RADIUS || y < MEDIAN_RADIUS || y >= height - MEDIAN_RADIUS ||
+        (switching && pixel != 0 && pixel != 255)) {
+        output[index] = pixel;
         return;
     }
     uchar neighbours[MEDIAN_AREA];
@@ -144,7 +43,7 @@ __kernel void median_insertion(__global const uchar* input, __global uchar* outp
 #define HI(a, b) v[b] = max(v[a], v[b]);
 #define CP(a, b) v[a] = v[b];
 
-__kernel void median_network(__global const uchar* input, __global uchar* output, int width, int height)
+__kernel void median_network(__global const uchar* input, __global uchar* output, int width, int height, int switching)
 {
     const int x = get_global_id(0);
     const int y0 = get_global_id(1) * MEDIAN_STRIP;
@@ -164,7 +63,9 @@ __kernel void median_network(__global const uchar* input, __global uchar* output
             break;
         }
         const size_t index = (size_t)y * width + x;
-        output[index] = insideColumn && y >= MEDIAN_RADIUS && y < height - MEDIAN_RADIUS ? result[j] : input[index];
+        const uchar pixel = input[index];
+        const bool inside = insideColumn && y >= MEDIAN_RADIUS && y < height - MEDIAN_RADIUS;
+        output[index] = inside && (!switching || pixel == 0 || pixel == 255) ? result[j] : pixel;
     }
 }
 #endif

@@ -24,19 +24,31 @@ Image randomImage(int width, int height, std::mt19937& generator) {
     return image;
 }
 
-void checkRandomImages(MedianSort sort, int radius, int strip, const MedianNetwork& network, int threads) {
+Image keepNonImpulses(const Image& image, Image median) {
+    for (std::size_t i = 0; i < image.pixels.size(); ++i) {
+        if (image.pixels[i] != 0 && image.pixels[i] != 255) median.pixels[i] = image.pixels[i];
+    }
+    return median;
+}
+
+Image expectedMedian(const Image& image, int radius, bool switching) {
+    Image median = image;
+    medianFilterParallel(image, median, 1, MedianSort::Standard, radius);
+    return switching ? keepNonImpulses(image, median) : median;
+}
+
+void checkRandomImages(MedianSort sort, int radius, int strip, bool switching, const MedianNetwork& network, int threads) {
     std::mt19937 generator(2026);
     const int size = 2 * radius + 1;
     for (auto [width, height] : {std::pair{1, 1}, {size, size + 1}, {67, 45}, {300, 129}}) {
         const Image image = randomImage(width, height, generator);
-        Image expected = image;
-        medianFilterParallel(image, expected, 1, MedianSort::Standard, radius);
+        const Image expected = expectedMedian(image, radius, switching);
         Image cpu = image;
-        if (sort == MedianSort::Standard) medianFilterParallel(image, cpu, threads, sort, radius);
-        else medianFilterParallel(image, cpu, threads, network);
+        if (sort == MedianSort::Standard) medianFilterParallel(image, cpu, threads, sort, radius, 1, switching);
+        else medianFilterParallel(image, cpu, threads, network, switching);
         const std::string name = medianSortName(sort) + ' ' + std::to_string(width) + 'x' + std::to_string(height);
         if (cpu.pixels != expected.pixels) throw std::runtime_error(name + ": CPU differs from std::nth_element");
-        MedianFilterGPU gpu(image, sort, radius, strip);
+        MedianFilterGPU gpu(image, sort, radius, strip, switching);
         Image gpuResult = image;
         gpu.run(image, gpuResult);
         if (gpuResult.pixels != expected.pixels) throw std::runtime_error(name + ": GPU differs from std::nth_element");
@@ -47,26 +59,28 @@ void checkRandomImages(MedianSort sort, int radius, int strip, const MedianNetwo
 int main(int argc, char* argv[]) {
     try {
         BenchmarkOptions options(argc, argv, "images/nuclear_noisy.png", "results/median_filter_variants.csv",
-                                 {"--sort", "--radius", "--strip"});
+                                 {"--sort", "--radius", "--strip", "--mode"});
         const std::string sortName = options.parameter("--sort", "standard");
         const MedianSort sort = parseMedianSort(sortName);
         const int radius = parseNumber<int>(options.parameter("--radius", "1"));
         const std::string defaultStrip = sort != MedianSort::Shared ? "1" : radius == 1 ? "8" : "16";
         const int strip = parseNumber<int>(options.parameter("--strip", defaultStrip));
+        const std::string mode = options.parameter("--mode", "plain");
+        if (mode != "plain" && mode != "switching") throw std::invalid_argument("--mode must be plain or switching");
+        const bool switching = mode == "switching";
         if (radius < 1) throw std::invalid_argument("--radius must be at least 1");
         if (sort == MedianSort::Standard && strip != 1) throw std::invalid_argument("--strip is only for the shared sort");
         const MedianNetwork network = sort == MedianSort::Standard ? MedianNetwork{} : buildMedianNetwork(sort, radius, strip);
-        checkRandomImages(sort, radius, strip, network, options.threads);
+        checkRandomImages(sort, radius, strip, switching, network, options.threads);
 
         Image image = loadImage(options.image);
         auto cpuFilter = [&](Image& output, int threads) {
-            if (sort == MedianSort::Standard) medianFilterParallel(image, output, threads, sort, radius);
-            else medianFilterParallel(image, output, threads, network);
+            if (sort == MedianSort::Standard) medianFilterParallel(image, output, threads, sort, radius, 1, switching);
+            else medianFilterParallel(image, output, threads, network, switching);
         };
         Image result = image; // borders are not filtered, so both results start as a copy of the image
         Image parallelResult = image;
-        Image referenceResult = image; // always std::nth_element, so every other variant is checked against it
-        medianFilterParallel(image, referenceResult, 1, MedianSort::Standard, radius);
+        const Image referenceResult = expectedMedian(image, radius, switching); // always std::nth_element, so every other variant is checked against it
 
         double cpu1 = measure([&] { cpuFilter(result, 1); }, options.repeats);
         if (result.pixels != referenceResult.pixels) {
@@ -80,7 +94,7 @@ int main(int argc, char* argv[]) {
         });
         double overheadN = measureThreadOverhead(options.threads, options.repeats);
 
-        MedianFilterGPU gpu(image, sort, radius, strip);
+        MedianFilterGPU gpu(image, sort, radius, strip, switching);
         Image gpuResult = image;
         cl_event event = nullptr;
         std::vector<double> kernelTimes;
@@ -98,11 +112,11 @@ int main(int argc, char* argv[]) {
         const std::string window = std::to_string(size) + 'x' + std::to_string(size);
         std::filesystem::create_directories("results/median_filter");
         saveImage("results/median_filter/" + std::filesystem::path(options.image).stem().string() + "_median" +
-                  (radius == 1 ? "" : "_" + window) + ".png", result);
+                  (switching ? "_switching" : "") + (radius == 1 ? "" : "_" + window) + ".png", result);
 
         std::ostringstream row;
         row << std::setprecision(12) << std::quoted(options.image, '"', '"') << ',' << sortName << ',' << radius << ','
-            << strip << ',' << image.width << ',' << image.height << ',' << options.threads << ',' << options.repeats << ','
+            << strip << ',' << mode << ',' << image.width << ',' << image.height << ',' << options.threads << ',' << options.repeats << ','
             << cpu1 << ',' << cpuN << ',' << overheadN << ',' << gpuKernel << ',' << gpuTotal << ',';
         if (sort != MedianSort::Standard) {
             row << static_cast<double>(network.nominalComparators) / strip << ','
@@ -110,9 +124,9 @@ int main(int argc, char* argv[]) {
         } else {
             row << ',';
         }
-        appendCsv(options.output, "image,sort,radius,strip,width,height,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,"
+        appendCsv(options.output, "image,sort,radius,strip,mode,width,height,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,"
                                   "gpu_kernel_us,gpu_total_us,comparators_per_pixel,min_max_per_pixel", row.str());
-        std::cout << sortName << ' ' << window << " strip " << strip << ", median CPU1 / CPU" << options.threads
+        std::cout << sortName << ' ' << mode << ' ' << window << " strip " << strip << ", median CPU1 / CPU" << options.threads
                   << " / GPU total / GPU kernel [us]: " << cpu1 << " / " << cpuN << " / " << gpuTotal << " / " << gpuKernel;
         if (sort != MedianSort::Standard) {
             std::cout << ", comparators per pixel " << static_cast<double>(network.nominalComparators) / strip

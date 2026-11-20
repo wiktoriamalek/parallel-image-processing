@@ -11,14 +11,22 @@ parser.add_argument("--strips", type=Path, default=project / "results/median_fil
 args = parser.parse_args()
 
 VARIANTS = {
-    "standard": ("Sortowanie przez wstawianie (CPU: nth_element)", "#2a78d6", "o"),
+    "standard": ("Sortowanie przez wstawianie", "#2a78d6", "o"),
     "network": ("Sieć selekcji, jedno okno", "#eb6834", "s"),
     "bitonic": ("Sieć bitoniczna (dopełnienie do 2^n)", "#1baf7a", "^"),
     "shared": ("Sieć współdzielona przez pas okien", "#eda100", "D"),
 }
 WINDOW_COLORS = {1: "#2a78d6", 2: "#eb6834", 3: "#1baf7a"}
 TEXT = "#52514e"
-keys = ["image", "sort", "radius", "strip", "threads", "repeats"]
+
+
+def variant_label(sort, column):
+    if sort == "standard" and column.startswith("cpu"):
+        return "std::nth_element"
+    return VARIANTS[sort][0]
+
+
+keys = ["image", "sort", "radius", "strip", "mode", "threads", "repeats"]
 
 
 def load(path):
@@ -42,11 +50,12 @@ def label_end(ax, x, y, text):
 def by_window(data, column, ylabel, title, output):
     largest = data[data["pixels"] == data["pixels"].max()]
     fig, ax = plt.subplots(figsize=(10, 6))
-    for sort, (label, color, marker) in VARIANTS.items():
+    for sort, (_, color, marker) in VARIANTS.items():
         rows = largest[largest["sort"] == sort].sort_values("radius")
         if rows.empty:
             continue
-        ax.plot(rows["window"], rows[column], marker=marker, color=color, linewidth=2, markersize=8, label=label)
+        ax.plot(rows["window"], rows[column], marker=marker, color=color, linewidth=2, markersize=8,
+                label=variant_label(sort, column))
         last = rows.iloc[-1]
         label_end(ax, last["window"], last[column], f"{last[column] / 1000:.2f} ms")
     style(ax, ylabel)
@@ -63,10 +72,11 @@ def by_resolution(data, column, ylabel, title, output):
     radii = sorted(data["radius"].unique())
     fig, axes = plt.subplots(1, len(radii), figsize=(5 * len(radii), 5), sharey=True)
     for ax, radius in zip(axes, radii):
-        for sort, (label, color, marker) in VARIANTS.items():
+        for sort, (_, color, marker) in VARIANTS.items():
             rows = data[(data["sort"] == sort) & (data["radius"] == radius)].sort_values("pixels")
             if not rows.empty:
-                ax.plot(rows["pixels"], rows[column], marker=marker, color=color, linewidth=2, markersize=7, label=label)
+                ax.plot(rows["pixels"], rows[column], marker=marker, color=color, linewidth=2, markersize=7,
+                        label=variant_label(sort, column))
         ax.set_xscale("log", base=2)
         ax.set_xlabel("Liczba pikseli")
         size = 2 * radius + 1
@@ -103,7 +113,39 @@ def by_strip(strips, output):
     plt.close(fig)
 
 
-data = load(args.csv)
+def switching_cost(data, output):
+    largest = data[data["pixels"] == data["pixels"].max()]
+    table = largest.pivot_table(index=["window", "sort"], columns="mode", values=["gpu_kernel_us", "cpu_nt_us"])
+    if "switching" not in table.columns.get_level_values("mode"):
+        return
+    windows = sorted(largest["window"].unique())
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5), sharey=True)
+    width = 0.2
+    for ax, (column, title) in zip(axes, [("gpu_kernel_us", "GPU: sam kernel"), ("cpu_nt_us", f"CPU: {largest['threads'].max()} wątków")]):
+        ratio = table[(column, "switching")] / table[(column, "plain")]
+        for offset, (sort, (_, color, _)) in enumerate(VARIANTS.items()):
+            values = [ratio.get((window, sort), float("nan")) for window in windows]
+            positions = [i + (offset - 1.5) * width for i in range(len(windows))]
+            bars = ax.bar(positions, values, width * 0.9, color=color, label=variant_label(sort, column))
+            ax.bar_label(bars, fmt="%.2f", fontsize=7, color=TEXT, padding=2)
+        ax.axhline(1, color=TEXT, linewidth=1, linestyle="--")
+        ax.set_xticks(range(len(windows)), windows)
+        ax.set_xlabel("Rozmiar okna")
+        ax.set_title(title)
+        ax.grid(True, axis="y", alpha=0.3)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.set_ylim(0, 1.55)
+        ax.legend(frameon=False, fontsize=8, loc="upper center", ncol=2)
+    axes[0].set_ylabel("Czas przełączającej / czas zwykłej mediany")
+    width_px, height_px = largest.iloc[0][["width", "height"]]
+    fig.suptitle(f"Koszt mediany przełączającej (poniżej 1 = szybciej niż zwykła), obraz {width_px}×{height_px}")
+    fig.tight_layout()
+    fig.savefig(output, dpi=200)
+    plt.close(fig)
+
+
+everything = load(args.csv)
+data = everything[everything["mode"] == "plain"]
 output_dir = args.csv.parent / f"{args.csv.stem}_plots"
 output_dir.mkdir(parents=True, exist_ok=True)
 by_window(data, "gpu_kernel_us", "Mediana czasu kernela [µs]", "Filtr medianowy na GPU: sam kernel", output_dir / "gpu_kernel_by_window.png")
@@ -126,5 +168,11 @@ print("\nComparators before pruning and min/max operations after pruning, per pi
 speedup.to_csv(output_dir / "speedup_vs_network.csv")
 work.to_csv(output_dir / "network_work.csv")
 
+switching_cost(everything, output_dir / "switching_cost.png")
+largest = everything[everything["pixels"] == everything["pixels"].max()]
+modes = largest.pivot_table(index=["window", "sort"], columns="mode", values=["gpu_kernel_us", "cpu_1t_us", "cpu_nt_us"])
+print("\nPlain and switching median on the largest image [us]:\n", modes.round(1).to_string())
+
 if args.strips.exists():
-    by_strip(load(args.strips), output_dir / "shared_strip_length.png")
+    strips = load(args.strips)
+    by_strip(strips[strips["mode"] == "plain"], output_dir / "shared_strip_length.png")

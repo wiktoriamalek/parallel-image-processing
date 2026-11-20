@@ -20,6 +20,10 @@
 #include <utility>
 
 namespace {
+int medianStrip(const Parameters& parameters) {
+    return static_cast<MedianSort>(parameters.medianSort) == MedianSort::Shared ? parameters.medianStrip : 1;
+}
+
 BrownConradyCoefficients brownConradyCoefficients(const Parameters& parameters) {
     return {parameters.k1, parameters.k2, parameters.k3, parameters.p1, parameters.p2};
 }
@@ -82,8 +86,18 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
                 convolution(image, selected.kernel, selected.absoluteValue, output, threads);
             }, repeats)};
         }
-        case Algorithm::MedianFilter:
-            return {measure([&] { medianFilterParallel(image, output, threads, parameters.sortingNetwork); }, repeats)};
+        case Algorithm::MedianFilter: {
+            const MedianSort sort = static_cast<MedianSort>(parameters.medianSort);
+            if (sort == MedianSort::Standard) {
+                return {measure([&] {
+                    medianFilterParallel(image, output, threads, sort, parameters.medianRadius, 1, parameters.medianSwitching);
+                }, repeats)};
+            }
+            const MedianNetwork network = buildMedianNetwork(sort, parameters.medianRadius, medianStrip(parameters));
+            return {measure([&] {
+                medianFilterParallel(image, output, threads, network, parameters.medianSwitching);
+            }, repeats)};
+        }
         case Algorithm::Distortion:
             if (parameters.distortionModel == 1) {
                 BrownConradyCoefficients coefficients = brownConradyCoefficients(parameters);
@@ -258,7 +272,8 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return measureGPU(gpu, image, repeats, output);
         }
         case Algorithm::MedianFilter: {
-            MedianFilterGPU gpu(image, parameters.sortingNetwork);
+            MedianFilterGPU gpu(image, static_cast<MedianSort>(parameters.medianSort), parameters.medianRadius,
+                                medianStrip(parameters), parameters.medianSwitching);
             return measureGPU(gpu, image, repeats, output);
         }
         case Algorithm::Distortion: {

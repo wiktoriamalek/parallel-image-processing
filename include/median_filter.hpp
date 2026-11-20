@@ -1,15 +1,9 @@
 #pragma once
 #include "image.hpp"
 #include "opencl_utils.hpp"
-#include <array>
 #include <cstddef>
 #include <string>
 #include <vector>
-
-Image medianFilter(const Image& image);
-void medianFilterRows(const Image& image, Image& result, int firstRow, int endRow, bool sortingNetwork=false); // it doesnt need to return a result, it can modify it through a reference
-void medianFilterParallel(const Image& image, Image& result, int threads, bool sortingNetwork=false);
-unsigned char medianOf9(std::array<unsigned char, 9>& p);
 
 enum class MedianSort { Standard, Network, Bitonic, Shared };
 
@@ -24,7 +18,6 @@ struct MedianNetwork {
         int b;
     };
 
-    MedianSort sort = MedianSort::Network;
     int radius = 1;
     int strip = 1;
     int inputs = 0;
@@ -42,20 +35,20 @@ struct MedianNetwork {
 
 MedianNetwork buildMedianNetwork(MedianSort sort, int radius, int strip = 1);
 
-void medianFilterParallel(const Image& image, Image& result, int threads, MedianSort sort, int radius, int strip = 1);
-void medianFilterParallel(const Image& image, Image& result, int threads, const MedianNetwork& network);
+void medianFilterParallel(const Image& image, Image& result, int threads, MedianSort sort, int radius, int strip = 1,
+                          bool switching = false);
+void medianFilterParallel(const Image& image, Image& result, int threads, const MedianNetwork& network,
+                          bool switching = false);
 
 class MedianFilterGPU {
 public:
-    explicit MedianFilterGPU(const Image& image, bool sortingNetwork = false);
-    MedianFilterGPU(const Image& image, MedianSort sort, int radius, int strip = 1);
+    MedianFilterGPU(const Image& image, MedianSort sort, int radius, int strip = 1, bool switching = false);
     ~MedianFilterGPU();
     MedianFilterGPU(const MedianFilterGPU&) = delete;
     MedianFilterGPU& operator=(const MedianFilterGPU&) = delete;
     void run(const Image& image, Image& output, cl_event* kernelEvent = nullptr);
 
 private:
-    void createBuffers(const char* kernelName);
     void release();
     OpenCL cl;
     cl_kernel kernel = nullptr;

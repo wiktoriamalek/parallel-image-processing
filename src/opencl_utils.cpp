@@ -28,9 +28,10 @@ double kernelTimeUs(cl_event event) {
     return nanoseconds / 1000.0;
 }
 
-OpenCL::OpenCL(const std::string& kernelPath) : OpenCL(std::vector<std::string>{kernelPath}) {}
+OpenCL::OpenCL(const std::string& kernelPath, const std::string& sourcePrefix)
+    : OpenCL(std::vector<std::string>{kernelPath}, sourcePrefix) {}
 
-OpenCL::OpenCL(const std::vector<std::string>& kernelPaths) {
+OpenCL::OpenCL(const std::vector<std::string>& kernelPaths, const std::string& sourcePrefix) {
     try {
         cl_uint count = 0;
         checkCL(clGetPlatformIDs(0, nullptr, &count), "clGetPlatformIDs");
@@ -52,6 +53,7 @@ OpenCL::OpenCL(const std::vector<std::string>& kernelPaths) {
         checkCL(error, "clCreateCommandQueue");
 
         std::vector<std::string> sources;
+        if (!sourcePrefix.empty()) sources.push_back(sourcePrefix + '\n');
         std::string names;
         for (const std::string& kernelPath : kernelPaths) {
             std::ifstream file(kernelPath);

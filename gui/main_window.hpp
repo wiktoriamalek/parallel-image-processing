@@ -84,6 +84,8 @@ private:
     QSpinBox* seedYSpin;
     QSpinBox* toleranceSpin;
     QCheckBox* localTilesCheck;
+    QDoubleSpinBox* cannyLowSpin;
+    QDoubleSpinBox* cannyHighSpin;
     QCheckBox* cpu1Check;
     QCheckBox* cpuNCheck;
     QCheckBox* cpuDynamicCheck;

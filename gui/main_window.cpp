@@ -30,7 +30,7 @@
 namespace {
 const char* algorithmNames[] = {"Progowanie", "Negatyw", "Kontrast", "Otsu", "Multi-Otsu", "Doliny histogramu",
                                 "Bernsen", "Niblack", "Sauvola", "Konwolucja 3×3", "Filtr medianowy 3×3",
-                                "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru"};
+                                "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru", "Canny (krawędzie)"};
 
 QImage toQImage(const Image& image) {
     return QImage(image.pixels.data(), image.width, image.height, image.width, QImage::Format_Grayscale8).copy();
@@ -212,6 +212,15 @@ QWidget* MainWindow::createControls() {
     toleranceSpin->setValue(defaults.tolerance);
     localTilesCheck = new QCheckBox("GPU: kafelki w pamięci lokalnej");
     localTilesCheck->setChecked(defaults.localTiles);
+    cannyLowSpin = new QDoubleSpinBox;
+    cannyHighSpin = new QDoubleSpinBox;
+    for (auto* spin : {cannyLowSpin, cannyHighSpin}) {
+        spin->setRange(0.0, 1500.0);
+        spin->setDecimals(1);
+        spin->setSingleStep(5.0);
+    }
+    cannyLowSpin->setValue(defaults.cannyLow);
+    cannyHighSpin->setValue(defaults.cannyHigh);
 
     parameterPages = new QStackedWidget;
     std::vector<int> algorithmPages;
@@ -245,6 +254,10 @@ QWidget* MainWindow::createControls() {
         {"", localTilesCheck},
         {"", note("Kliknij obraz wejściowy, żeby wybrać ziarno. Bez kafelków GPU dokłada 1 piksel na iterację, "
                   "więc duży obszar liczy się nawet sekundy.")}}));
+    addPage(parameterPage({{"Próg dolny", cannyLowSpin}, {"Próg górny", cannyHighSpin},
+        {"", note("Gauss 3×3 → Sobel (moduł i kierunek) → tłumienie niemaksymalne → podwójny próg → histereza. "
+                  "Progi dotyczą modułu gradientu Sobela (0…1442). Piksel powyżej progu górnego jest krawędzią, "
+                  "między progami tylko wtedy, gdy łączy się z krawędzią.")}}));
     connect(algorithmBox, &QComboBox::currentIndexChanged, this, [this, algorithmPages](int index) {
         parameterPages->setCurrentIndex(algorithmPages.at(index));
     });
@@ -469,5 +482,7 @@ Parameters MainWindow::currentParameters() const {
     parameters.seedY = seedYSpin->value();
     parameters.tolerance = toleranceSpin->value();
     parameters.localTiles = localTilesCheck->isChecked();
+    parameters.cannyLow = static_cast<float>(cannyLowSpin->value());
+    parameters.cannyHigh = static_cast<float>(cannyHighSpin->value());
     return parameters;
 }

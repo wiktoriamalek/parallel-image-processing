@@ -13,8 +13,8 @@ double kernelTimeUs(cl_event event);
 
 class OpenCL {
 public:
-    explicit OpenCL(const std::string& kernelPath);
-    explicit OpenCL(const std::vector<std::string>& kernelPaths);
+    explicit OpenCL(const std::string& kernelPath, const std::string& sourcePrefix = "");
+    explicit OpenCL(const std::vector<std::string>& kernelPaths, const std::string& sourcePrefix = "");
     ~OpenCL();
     OpenCL(const OpenCL&) = delete;
     OpenCL& operator=(const OpenCL&) = delete;

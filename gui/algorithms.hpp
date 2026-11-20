@@ -5,7 +5,7 @@
 #include <vector>
 
 enum class Algorithm { Threshold, Negative, Contrast, Otsu, MultiOtsu, PeaksValleys, Bernsen, Niblack, Sauvola,
-                       Convolution, MedianFilter, Distortion, Resize, RegionGrowing };
+                       Convolution, MedianFilter, Distortion, Resize, RegionGrowing, Canny };
 enum class Mode { CPU1, CPUN, CPUNDynamic, GPU, GPUZeroCopy };
 
 struct Parameters {
@@ -30,6 +30,8 @@ struct Parameters {
     int seedY = 0;
     int tolerance = 20;
     bool localTiles = true;
+    float cannyLow = 50.0f;
+    float cannyHigh = 100.0f;
 };
 
 struct Timing {

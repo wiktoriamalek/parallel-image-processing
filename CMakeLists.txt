@@ -48,8 +48,9 @@ add_executable(brown_conrady_test tests/brown_conrady_test.cpp)
 add_executable(peaks_valleys_detection_test tests/peaks_valleys_detection_test.cpp)
 add_executable(niblack_sauvola_test tests/niblack_sauvola_test.cpp)
 add_executable(core_scheduling_test tests/core_scheduling_test.cpp)
+add_executable(canny_test tests/canny_test.cpp)
 
-foreach(target img_proc check_opencl thresholding_time_comparison identity_convolution_test otsu_test distortion_test bernsen_test median_filter_test region_growing_test multi_otsu_test negative_test contrast_test brown_conrady_test peaks_valleys_detection_test niblack_sauvola_test core_scheduling_test)
+foreach(target img_proc check_opencl thresholding_time_comparison identity_convolution_test otsu_test distortion_test bernsen_test median_filter_test region_growing_test multi_otsu_test negative_test contrast_test brown_conrady_test peaks_valleys_detection_test niblack_sauvola_test core_scheduling_test canny_test)
     target_link_libraries(${target} PRIVATE image_processing)
 endforeach()
 

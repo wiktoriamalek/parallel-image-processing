@@ -1,5 +1,6 @@
 #include "algorithms.hpp"
 #include "bernsen.hpp"
+#include "canny.hpp"
 #include "common_benchmarking.hpp"
 #include "contrast.hpp"
 #include "convolution.hpp"
@@ -106,6 +107,8 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return {measure([&] {
                 output = regionGrowingCPUParallel(image, parameters.seedX, parameters.seedY, parameters.tolerance, threads);
             }, repeats)};
+        case Algorithm::Canny:
+            return {measure([&] { canny(image, output, parameters.cannyLow, parameters.cannyHigh, threads); }, repeats)};
     }
     throw std::logic_error("Unknown algorithm");
 }
@@ -205,6 +208,18 @@ Timing runRegionGrowingGPU(const Image& image, const Parameters& parameters, int
     return timing;
 }
 
+Timing runCannyGPU(const Image& image, const Parameters& parameters, int repeats, Image& output) {
+    CannyGPU gpu(image, parameters.cannyLow, parameters.cannyHigh);
+    Timing timing;
+    std::vector<double> kernelTimes;
+    double kernelUs = 0.0;
+    timing.totalUs = measure([&] { gpu.run(image, output, &kernelUs); }, repeats, [] {}, [&](int repeat) {
+        if (repeat >= 0) kernelTimes.push_back(kernelUs);
+    });
+    timing.kernelUs = median(kernelTimes);
+    return timing;
+}
+
 Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& parameters, bool zeroCopy, int repeats,
               Image& output) {
     output = image;
@@ -265,6 +280,8 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
         }
         case Algorithm::RegionGrowing:
             return runRegionGrowingGPU(image, parameters, repeats, output);
+        case Algorithm::Canny:
+            return runCannyGPU(image, parameters, repeats, output);
     }
     throw std::logic_error("Unknown algorithm");
 }

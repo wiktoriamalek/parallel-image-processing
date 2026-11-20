@@ -140,7 +140,7 @@ uchar localThresholdValue(long count, uint sum, uint squares, long pixel, float 
 
 void localThresholdBand(__global const uchar* input, __global uchar* output, int width, int height, int radius,
                         float k, float stddevRange, int bandHeight, __local uint* localSum,
-                        __local uint* localSquares, bool sauvola)
+                        __local uint* localSquares, __local uint* blockSum, __local uint* blockSquares, bool sauvola)
 {
     const int id = get_local_id(0);
     const int items = get_local_size(0);
@@ -149,6 +149,7 @@ void localThresholdBand(__global const uchar* input, __global uchar* output, int
     const int stripStart = get_group_id(0) * stripOutput - radius;
     const int firstRow = get_group_id(1) * bandHeight;
     const int endRow = min(firstRow + bandHeight, height);
+    const int fullBlocks = (2 * radius + 1) / LOCAL_THRESHOLD_COLUMNS;
 
     uint columnSum[LOCAL_THRESHOLD_COLUMNS + 1];
     uint columnSquares[LOCAL_THRESHOLD_COLUMNS + 1];
@@ -190,10 +191,31 @@ void localThresholdBand(__global const uchar* input, __global uchar* output, int
         }
         barrier(CLK_LOCAL_MEM_FENCE);
 
+        if (fullBlocks > 1) {
+            for (int b = id; b * LOCAL_THRESHOLD_COLUMNS < stripWidth; b += items) {
+                const int start = b * LOCAL_THRESHOLD_COLUMNS;
+                const int stop = min(start + LOCAL_THRESHOLD_COLUMNS, stripWidth);
+                uint partSum = 0;
+                uint partSquares = 0;
+                for (int s = start; s < stop; s++) {
+                    partSum += localSum[s];
+                    partSquares += localSquares[s];
+                }
+                blockSum[b] = partSum;
+                blockSquares[b] = partSquares;
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+
         const int first = id * LOCAL_THRESHOLD_COLUMNS;
         uint sum = 0;
         uint squares = 0;
-        for (int s = first; s <= first + 2 * radius; s++) {
+        const int blocksUsed = fullBlocks > 1 ? fullBlocks : 0;
+        for (int b = id; b < id + blocksUsed; b++) {
+            sum += blockSum[b];
+            squares += blockSquares[b];
+        }
+        for (int s = first + blocksUsed * LOCAL_THRESHOLD_COLUMNS; s <= first + 2 * radius; s++) {
             sum += localSum[s];
             squares += localSquares[s];
         }
@@ -215,13 +237,17 @@ void localThresholdBand(__global const uchar* input, __global uchar* output, int
 }
 
 __kernel void niblack(__global const uchar* input, __global uchar* output, int width, int height, int radius,
-                      float k, float stddevRange, int bandHeight, __local uint* localSum, __local uint* localSquares)
+                      float k, float stddevRange, int bandHeight, __local uint* localSum, __local uint* localSquares,
+                      __local uint* blockSum, __local uint* blockSquares)
 {
-    localThresholdBand(input, output, width, height, radius, k, stddevRange, bandHeight, localSum, localSquares, false);
+    localThresholdBand(input, output, width, height, radius, k, stddevRange, bandHeight, localSum, localSquares,
+                       blockSum, blockSquares, false);
 }
 
 __kernel void sauvola(__global const uchar* input, __global uchar* output, int width, int height, int radius,
-                      float k, float stddevRange, int bandHeight, __local uint* localSum, __local uint* localSquares)
+                      float k, float stddevRange, int bandHeight, __local uint* localSum, __local uint* localSquares,
+                      __local uint* blockSum, __local uint* blockSquares)
 {
-    localThresholdBand(input, output, width, height, radius, k, stddevRange, bandHeight, localSum, localSquares, true);
+    localThresholdBand(input, output, width, height, radius, k, stddevRange, bandHeight, localSum, localSquares,
+                       blockSum, blockSquares, true);
 }

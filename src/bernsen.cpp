@@ -10,11 +10,18 @@ namespace {
 constexpr double sauvolaStddevRange = 128.0;
 constexpr int localThresholdGroupWidth = 256;
 constexpr int localThresholdColumnsPerItem = 8;
-constexpr int localThresholdBandHeight = 16;
+constexpr int localThresholdMinBandHeight = 16;
+constexpr int localThresholdMaxBandHeight = 64;
 constexpr std::size_t bernsenRowOutputs = 2048;
 constexpr std::size_t bernsenTileColumns = 32;
 constexpr std::size_t bernsenTileRows = 64;
 constexpr std::size_t bernsenTileLanes = 8;
+
+int localThresholdBandHeight(int radius) {
+    int band = localThresholdMinBandHeight;
+    while (band < radius && band < localThresholdMaxBandHeight) band *= 2;
+    return band;
+}
 
 template<class Threshold>
 void localThresholdRows(const Image& image, Image& result, int radius, int firstRow, int endRow,
@@ -105,7 +112,8 @@ LocalThresholdGPU::LocalThresholdGPU(const Image& image, LocalThresholdMethod me
     }
     const std::size_t outputColumns = localThresholdGroupWidth * localThresholdColumnsPerItem;
     const std::size_t groupsX = (static_cast<std::size_t>(width) + outputColumns - 1) / outputColumns;
-    const std::size_t groupsY = (static_cast<std::size_t>(height) + localThresholdBandHeight - 1) / localThresholdBandHeight;
+    const int bandHeight = localThresholdBandHeight(radius);
+    const std::size_t groupsY = (static_cast<std::size_t>(height) + bandHeight - 1) / bandHeight;
     globalWorkSize[0] = groupsX * localThresholdGroupWidth;
     globalWorkSize[1] = groupsY;
     localWorkSize[0] = localThresholdGroupWidth;
@@ -120,7 +128,6 @@ LocalThresholdGPU::LocalThresholdGPU(const Image& image, LocalThresholdMethod me
         checkCL(error, "clCreateKernel");
         const float factor = static_cast<float>(k);
         const float stddevRange = static_cast<float>(sauvolaStddevRange);
-        const int bandHeight = localThresholdBandHeight;
         const std::size_t localBytes = (outputColumns + 2 * radius) * sizeof(cl_uint);
         checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
         checkCL(clSetKernelArg(kernel, 1, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
@@ -132,6 +139,10 @@ LocalThresholdGPU::LocalThresholdGPU(const Image& image, LocalThresholdMethod me
         checkCL(clSetKernelArg(kernel, 7, sizeof(bandHeight), &bandHeight), "clSetKernelArg");
         checkCL(clSetKernelArg(kernel, 8, localBytes, nullptr), "clSetKernelArg");
         checkCL(clSetKernelArg(kernel, 9, localBytes, nullptr), "clSetKernelArg");
+        const std::size_t blockBytes = (outputColumns + 2 * radius + localThresholdColumnsPerItem - 1) /
+                                       localThresholdColumnsPerItem * sizeof(cl_uint);
+        checkCL(clSetKernelArg(kernel, 10, blockBytes, nullptr), "clSetKernelArg");
+        checkCL(clSetKernelArg(kernel, 11, blockBytes, nullptr), "clSetKernelArg");
     } catch (...) {
         release();
         throw;

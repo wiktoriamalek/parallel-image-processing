@@ -92,6 +92,7 @@ private:
     QCheckBox* cpu1Check;
     QCheckBox* cpuNCheck;
     QCheckBox* cpuDynamicCheck;
+    QComboBox* gpuBackendBox;
     QCheckBox* gpuCheck;
     QCheckBox* gpuZeroCopyCheck;
     QSpinBox* threadsSpin;

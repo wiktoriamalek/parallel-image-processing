@@ -1,4 +1,7 @@
 #include "algorithms.hpp"
+#ifdef __APPLE__
+#include "metal_algorithms.hpp"
+#endif
 #include "bernsen.hpp"
 #include "canny.hpp"
 #include "common_benchmarking.hpp"
@@ -321,7 +324,26 @@ Timing runAlgorithm(Algorithm algorithm, Mode mode, const Image& image, const Pa
         throw std::invalid_argument("This algorithm has no zero-copy GPU version");
     }
     if (mode == Mode::GPU || mode == Mode::GPUZeroCopy) {
-        return runGPU(algorithm, image, parameters, mode == Mode::GPUZeroCopy, repeats, output);
+        Timing timing = runGPU(algorithm, image, parameters, mode == Mode::GPUZeroCopy, repeats, output);
+        timing.gpuTimingMethod = "opencl_event_sum";
+        return timing;
+    }
+    if (mode == Mode::Metal) {
+#ifdef __APPLE__
+        MetalProcessor gpu(algorithm, image, parameters);
+        Timing timing;
+        std::vector<double> kernelTimes;
+        timing.totalUs = measure([&] { gpu.run(image, output); }, repeats, [] {}, [&](int repeat) {
+            if (repeat >= 0) kernelTimes.push_back(gpu.kernelTimeUs());
+        });
+        timing.kernelUs = median(kernelTimes);
+        if (!gpu.thresholds().empty()) timing.thresholds = gpu.thresholds();
+        if (algorithm == Algorithm::PeaksValleys) timing.smoothingIterations = gpu.iterations();
+        timing.gpuTimingMethod = gpu.profilingMethod();
+        return timing;
+#else
+        throw std::runtime_error("Metal is available on macOS");
+#endif
     }
     if (mode == Mode::CPUNDynamic) {
         ScopedParallelSettings dynamic({Schedule::Dynamic, 8, nullptr});

@@ -293,7 +293,12 @@ QWidget* MainWindow::createControls() {
     cpu1Check = new QCheckBox("CPU, 1 wątek");
     cpuNCheck = new QCheckBox("CPU, wątków:");
     cpuDynamicCheck = new QCheckBox("CPU, podział dynamiczny");
-    gpuCheck = new QCheckBox("GPU (OpenCL)");
+    gpuBackendBox = new QComboBox;
+    gpuBackendBox->addItem("OpenCL");
+#ifdef __APPLE__
+    gpuBackendBox->addItem("Metal");
+#endif
+    gpuCheck = new QCheckBox("GPU");
     gpuZeroCopyCheck = new QCheckBox("GPU (OpenCL), zero-copy");
     for (auto* check : {cpu1Check, cpuNCheck, cpuDynamicCheck, gpuCheck, gpuZeroCopyCheck}) check->setChecked(true);
     threadsSpin = new QSpinBox;
@@ -311,14 +316,18 @@ QWidget* MainWindow::createControls() {
     modesLayout->addRow(cpu1Check);
     modesLayout->addRow(threadsRow);
     modesLayout->addRow(cpuDynamicCheck);
+    modesLayout->addRow("Backend GPU", gpuBackendBox);
     modesLayout->addRow(gpuCheck);
     modesLayout->addRow(gpuZeroCopyCheck);
     modesLayout->addRow("Powtórzenia", repeatsSpin);
     modesLayout->addRow(note("Czas to mediana z powtórzeń. Podział dynamiczny: tyle samo wątków, ale pobierają "
                              "małe kawałki obrazu, więc rdzenie wydajne robią więcej. Zero-copy: te same kernele "
                              "bez kopiowania obrazu (wspólna pamięć CPU i GPU), dla Multi-Otsu i dolin."));
-    auto updateZeroCopy = [this] { gpuZeroCopyCheck->setEnabled(supportsZeroCopy(currentAlgorithm())); };
+    auto updateZeroCopy = [this] {
+        gpuZeroCopyCheck->setEnabled(gpuBackendBox->currentIndex() == 0 && supportsZeroCopy(currentAlgorithm()));
+    };
     connect(algorithmBox, &QComboBox::currentIndexChanged, this, updateZeroCopy);
+    connect(gpuBackendBox, &QComboBox::currentIndexChanged, this, updateZeroCopy);
     updateZeroCopy();
 
     runButton = new QPushButton("Uruchom");
@@ -393,9 +402,12 @@ void MainWindow::run() {
     if (cpuDynamicCheck->isChecked()) {
         modes.emplace_back(Mode::CPUNDynamic, QString("CPU, %1 wątków, dynamiczny").arg(threadsSpin->value()));
     }
-    if (gpuCheck->isChecked()) modes.emplace_back(Mode::GPU, "GPU");
+    if (gpuCheck->isChecked()) {
+        const bool metal = gpuBackendBox->currentIndex() == 1;
+        modes.emplace_back(metal ? Mode::Metal : Mode::GPU, "GPU (" + gpuBackendBox->currentText() + ")");
+    }
     if (gpuZeroCopyCheck->isChecked() && gpuZeroCopyCheck->isEnabled()) {
-        modes.emplace_back(Mode::GPUZeroCopy, "GPU, zero-copy");
+        modes.emplace_back(Mode::GPUZeroCopy, "GPU (OpenCL), zero-copy");
     }
     if (modes.empty()) {
         statusBar()->showMessage("Zaznacz co najmniej jeden tryb");
@@ -465,6 +477,7 @@ void MainWindow::showResult(int row) {
 
 void MainWindow::setRunning(bool running) {
     openButton->setEnabled(!running);
+    gpuBackendBox->setEnabled(!running);
     runButton->setEnabled(!running);
     saveButton->setEnabled(!running && !results.empty());
 }

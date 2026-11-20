@@ -31,7 +31,57 @@ add_library(image_processing
 
 target_include_directories(image_processing PUBLIC include)
 target_link_libraries(image_processing PUBLIC OpenCL::OpenCL Threads::Threads)
+if(APPLE)
+    enable_language(OBJCXX)
 
+    set_target_properties(image_processing PROPERTIES
+            OBJCXX_STANDARD 17
+            OBJCXX_STANDARD_REQUIRED ON
+    )
+
+    target_sources(image_processing PRIVATE src/metal_utils.mm src/metal_algorithms.mm)
+
+    set_source_files_properties(src/metal_utils.mm src/metal_algorithms.mm PROPERTIES
+            COMPILE_OPTIONS "-fobjc-arc"
+    )
+
+    find_program(XCRUN_EXECUTABLE xcrun REQUIRED)
+    file(GLOB METAL_KERNEL_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/*.metal")
+    list(REMOVE_ITEM METAL_KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/median_filter.metal")
+    set(METAL_AIR_FILES)
+    foreach(kernel_source IN LISTS METAL_KERNEL_SOURCES)
+        get_filename_component(kernel_name "${kernel_source}" NAME_WE)
+        set(kernel_air "${CMAKE_CURRENT_BINARY_DIR}/metal/${kernel_name}.air")
+        add_custom_command(OUTPUT "${kernel_air}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/metal"
+                COMMAND ${XCRUN_EXECUTABLE} -sdk macosx metal -std=metal3.0 -O2 -fno-fast-math -ffp-contract=off
+                        -c "${kernel_source}" -o "${kernel_air}"
+                DEPENDS "${kernel_source}"
+                VERBATIM
+        )
+        list(APPEND METAL_AIR_FILES "${kernel_air}")
+    endforeach()
+    set(METAL_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/metal/image_processing.metallib")
+    add_custom_command(OUTPUT "${METAL_LIBRARY}"
+            COMMAND ${XCRUN_EXECUTABLE} -sdk macosx metallib ${METAL_AIR_FILES} -o "${METAL_LIBRARY}"
+            DEPENDS ${METAL_AIR_FILES}
+            VERBATIM
+    )
+    add_custom_target(metal_kernels DEPENDS "${METAL_LIBRARY}")
+    add_dependencies(image_processing metal_kernels)
+    target_compile_definitions(image_processing PRIVATE
+            METAL_LIBRARY_PATH="${METAL_LIBRARY}"
+            METAL_MEDIAN_SOURCE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/kernels/metal/median_filter.metal"
+    )
+
+    find_library(METAL_FRAMEWORK Metal REQUIRED)
+    find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
+
+    target_link_libraries(image_processing PUBLIC
+            ${METAL_FRAMEWORK}
+            ${FOUNDATION_FRAMEWORK}
+    )
+endif()
 add_executable(img_proc src/main.cpp)
 add_executable(check_opencl tests/check_opencl.cpp)
 add_executable(thresholding_time_comparison tests/thresholding_time_comparison.cpp)
@@ -56,8 +106,14 @@ endforeach()
 
 if(APPLE)
     list(APPEND CMAKE_PREFIX_PATH /opt/homebrew/opt/qt)
+    add_executable(check_metal tests/check_metal.cpp)
+    target_link_libraries(check_metal PRIVATE image_processing)
 endif()
 find_package(Qt6 COMPONENTS Widgets Concurrent QUIET)
+add_library(algorithm_benchmarking gui/algorithms.cpp)
+target_include_directories(algorithm_benchmarking PUBLIC gui)
+target_link_libraries(algorithm_benchmarking PUBLIC image_processing)
+
 if(Qt6_FOUND)
     add_executable(img_gui
             gui/main.cpp
@@ -65,11 +121,10 @@ if(Qt6_FOUND)
             gui/main_window.hpp
             gui/image_view.cpp
             gui/image_view.hpp
-            gui/algorithms.cpp
             gui/algorithms.hpp
     )
     set_target_properties(img_gui PROPERTIES AUTOMOC ON)
-    target_link_libraries(img_gui PRIVATE image_processing Qt6::Widgets Qt6::Concurrent)
+    target_link_libraries(img_gui PRIVATE algorithm_benchmarking Qt6::Widgets Qt6::Concurrent)
     target_compile_definitions(img_gui PRIVATE PROJECT_DIR="${CMAKE_SOURCE_DIR}")
 else()
     message(STATUS "Qt 6 not found, img_gui will not be built")

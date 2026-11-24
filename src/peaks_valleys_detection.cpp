@@ -116,7 +116,9 @@ void peaks_valleys_detectionParallel(const Image& image, Image& output, int thre
     const std::vector<int> thresholds = peaks_valleys_detectionThresholds(calculateHistogram(image, threads), maxClasses);
     const std::array<unsigned char, 256> lookup = multiOtsuLookupTable(thresholds);
     parallelRanges(image.pixels.size(), threads, [&](std::size_t begin, std::size_t end, int) {
-        for (std::size_t i = begin; i < end; ++i) output.pixels[i] = lookup[image.pixels[i]];
+        const unsigned char* input = image.pixels.data();
+        unsigned char* result = output.pixels.data();
+        for (std::size_t i = begin; i < end; ++i) result[i] = lookup[input[i]];
     });
 }
 
@@ -238,10 +240,10 @@ void Peaks_valleys_detectionGPU::upload(const Image& image, Image& output) {
 void Peaks_valleys_detectionGPU::compute(cl_event* histogramEvent, cl_event* thresholdsEvent, cl_event* lookupEvent) {
     const size_t localSize = 256;
     const size_t globalSize = 256 * localSize;
-    checkCL(clEnqueueNDRangeKernel(cl.queue, clearHistogramKernel, 1, nullptr, &localSize, nullptr, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, clearHistogramKernel, 1, nullptr, &localSize, &localSize, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");
     checkCL(clEnqueueNDRangeKernel(cl.queue, histogramKernel, 1, nullptr, &globalSize, &localSize, 0, nullptr, histogramEvent), "clEnqueueNDRangeKernel");
     checkCL(clEnqueueNDRangeKernel(cl.queue, thresholdsKernel, 1, nullptr, &localSize, &localSize, 0, nullptr, thresholdsEvent), "clEnqueueNDRangeKernel");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, lookupKernel, 1, nullptr, &pixelCount, nullptr, 0, nullptr, lookupEvent), "clEnqueueNDRangeKernel");
+    enqueueLine(cl.queue, lookupKernel, pixelCount, lookupEvent);
 }
 
 void Peaks_valleys_detectionGPU::finish() {

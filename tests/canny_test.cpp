@@ -167,6 +167,17 @@ void checkImages(int threads) {
     }
     if (weakKept == 0) throw std::runtime_error("The random images never kept a weak edge, so hysteresis was not tested");
 
+    Image reused = randomImage(256, 256, generator);
+    Image reusedOutput = reused;
+    CannyGPU reusedGPU(reused, 50.0f, 100.0f);
+    for (int repeat = 0; repeat < 32; ++repeat) {
+        reused = randomImage(256, 256, generator);
+        const Reference reference = naiveCanny(reused, 50.0f, 100.0f);
+        double kernelUs = 0.0;
+        reusedGPU.run(reused, reusedOutput, &kernelUs);
+        expectSame(reference.edges, reusedOutput, "reused GPU buffers, frame " + std::to_string(repeat));
+    }
+
     Image step{20, 12, std::vector<unsigned char>(20 * 12, 0)};
     for (int y = 0; y < step.height; ++y) {
         for (int x = step.width / 2; x < step.width; ++x) step.pixels[static_cast<std::size_t>(y) * step.width + x] = 255;

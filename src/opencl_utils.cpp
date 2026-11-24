@@ -28,6 +28,22 @@ double kernelTimeUs(cl_event event) {
     return nanoseconds / 1000.0;
 }
 
+std::size_t roundUp(std::size_t value, std::size_t multiple) {
+    return (value + multiple - 1) / multiple * multiple;
+}
+
+void enqueueLine(cl_command_queue queue, cl_kernel kernel, std::size_t count, cl_event* event) {
+    const std::size_t global = roundUp(count, lineGroupSize);
+    const std::size_t local = lineGroupSize;
+    checkCL(clEnqueueNDRangeKernel(queue, kernel, 1, nullptr, &global, &local, 0, nullptr, event), "clEnqueueNDRangeKernel");
+}
+
+void enqueueTiles(cl_command_queue queue, cl_kernel kernel, std::size_t width, std::size_t height, cl_event* event) {
+    const std::size_t global[2] = {roundUp(width, tileGroupSize), roundUp(height, tileGroupSize)};
+    const std::size_t local[2] = {tileGroupSize, tileGroupSize};
+    checkCL(clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, local, 0, nullptr, event), "clEnqueueNDRangeKernel");
+}
+
 OpenCL::OpenCL(const std::string& kernelPath, const std::string& sourcePrefix)
     : OpenCL(std::vector<std::string>{kernelPath}, sourcePrefix) {}
 

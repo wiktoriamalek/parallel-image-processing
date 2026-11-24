@@ -18,43 +18,34 @@ struct Method {
     std::string name;
     LocalThresholdMethod gpuMethod;
     void (*cpu)(const Image&, Image&, int, double, int);
-    double (*threshold)(double mean, double stddev, double k);
+    bool (*isBlack)(std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel, int hundredthsK);
 };
-
-double niblackValue(double mean, double stddev, double k) {
-    return mean - k * stddev;
-}
-
-double sauvolaValue(double mean, double stddev, double k) {
-    return mean * (1.0 + k * (stddev / 128.0 - 1.0));
-}
 
 const std::vector<Method>& methods() {
     static const std::vector<Method> all = {
-        {"niblack", LocalThresholdMethod::Niblack, niblackThreshold, niblackValue},
-        {"sauvola", LocalThresholdMethod::Sauvola, sauvolaThreshold, sauvolaValue},
+        {"niblack", LocalThresholdMethod::Niblack, niblackThreshold, niblackIsBlack},
+        {"sauvola", LocalThresholdMethod::Sauvola, sauvolaThreshold, sauvolaIsBlack},
     };
     return all;
 }
 
-double windowThreshold(const Image& image, int x, int y, int radius, const Method& method, double k) {
+bool windowIsBlack(const Image& image, int x, int y, int radius, const Method& method, double k) {
     const int left = x - std::min(radius, x);
     const int right = x + std::min(radius, image.width - 1 - x);
     const int top = y - std::min(radius, y);
     const int bottom = y + std::min(radius, image.height - 1 - y);
-    double sum = 0.0;
-    double sumOfSquares = 0.0;
+    std::int64_t sum = 0;
+    std::int64_t sumOfSquares = 0;
     for (int ny = top; ny <= bottom; ++ny) {
         for (int nx = left; nx <= right; ++nx) {
-            const double value = image.pixels[static_cast<std::size_t>(ny) * image.width + nx];
+            const std::int64_t value = image.pixels[static_cast<std::size_t>(ny) * image.width + nx];
             sum += value;
             sumOfSquares += value * value;
         }
     }
-    const double count = static_cast<double>(right - left + 1) * (bottom - top + 1);
-    const double mean = sum / count;
-    const double variance = sumOfSquares / count - mean * mean;
-    return method.threshold(mean, std::sqrt(std::max(0.0, variance)), k);
+    const std::int64_t count = static_cast<std::int64_t>(right - left + 1) * (bottom - top + 1);
+    const int pixel = image.pixels[static_cast<std::size_t>(y) * image.width + x];
+    return method.isBlack(count, sum, sumOfSquares, pixel, localThresholdHundredths(k));
 }
 
 Image naive(const Image& image, int radius, const Method& method, double k) {
@@ -62,7 +53,7 @@ Image naive(const Image& image, int radius, const Method& method, double k) {
     for (int y = 0; y < image.height; ++y) {
         for (int x = 0; x < image.width; ++x) {
             const auto index = static_cast<std::size_t>(y) * image.width + x;
-            result.pixels[index] = image.pixels[index] < windowThreshold(image, x, y, radius, method, k) ? 0 : 255;
+            result.pixels[index] = windowIsBlack(image, x, y, radius, method, k) ? 0 : 255;
         }
     }
     return result;
@@ -93,14 +84,10 @@ long long checkGPU(const Image& image, const Image& cpu, const Image& gpu, int r
         if (cpu.pixels[i] == gpu.pixels[i]) continue;
         const int x = static_cast<int>(i % image.width);
         const int y = static_cast<int>(i / image.width);
-        const double threshold = windowThreshold(image, x, y, radius, method, k);
-        if (std::abs(image.pixels[i] - threshold) > 1e-3) {
-            std::ostringstream message;
-            message << std::setprecision(10) << describe(method, image, radius, k) << ": GPU differs at (" << x << ", "
-                    << y << ") with pixel " << int(image.pixels[i]) << " far from the threshold " << threshold;
-            throw std::runtime_error(message.str());
-        }
-        ++different;
+        std::ostringstream message;
+        message << describe(method, image, radius, k) << ": GPU differs from CPU at (" << x << ", " << y << ") with pixel "
+                << int(image.pixels[i]);
+        throw std::runtime_error(message.str());
     }
     return different;
 }
@@ -157,8 +144,8 @@ void checkRandomImages(int threads) {
     if (!thrown) throw std::runtime_error("GPU accepted a radius it cannot handle");
 
     std::cout << "CPU 1 thread and " << threads << " threads match the naive version on random and flat images "
-              << "(radius 0-50, k 0-0.5); GPU differs in " << different << " of " << checked
-              << " pixels, all within 0.001 of the threshold\n";
+              << "(radius 0-50, k 0-0.5); GPU matches them in all " << checked << " pixels (" << different
+              << " different)\n";
 }
 }
 
@@ -205,7 +192,7 @@ int main(int argc, char* argv[]) {
             appendCsv(options.output, "method,image,width,height,radius,k,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us,gpu_different_pixels", row.str());
             std::cout << method.name << ": median CPU1 / CPU" << options.threads << " / GPU total / GPU kernel [us]: "
                       << cpu1 << " / " << cpuN << " / " << gpuTotal << " / " << gpuKernel << ", GPU differs in "
-                      << different << " pixels (near the threshold)\n";
+                      << different << " pixels\n";
         }
         return 0;
     } catch (const std::exception& error) {

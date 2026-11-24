@@ -21,12 +21,13 @@ Image thresholding(const Image& image, int threshold)
 
 void ThresholdRange(Image& image, int threshold, std::size_t min, std::size_t max)
 {
+    unsigned char* pixels = image.pixels.data();
     for (std::size_t i = min; i < max; ++i) {
-        if (image.pixels[i] < threshold) {
-            image.pixels[i] = 0;
+        if (pixels[i] < threshold) {
+            pixels[i] = 0;
         }
         else {
-            image.pixels[i] = 255;
+            pixels[i] = 255;
         }
     }
 }
@@ -47,6 +48,8 @@ ThresholdGPU::ThresholdGPU(const Image& image, int threshold)
         checkCL(error, "clCreateKernel");
         checkCL(clSetKernelArg(kernel, 0, sizeof(buffer), &buffer), "clSetKernelArg"); // which kernel do I set an argument for, argument number, argument size, argument content address
         checkCL(clSetKernelArg(kernel, 1, sizeof(threshold), &threshold), "clSetKernelArg");
+        const int pixelCount = static_cast<int>(bufferSize);
+        checkCL(clSetKernelArg(kernel, 2, sizeof(pixelCount), &pixelCount), "clSetKernelArg");
     } catch (...) {
         release();
         throw;
@@ -67,6 +70,6 @@ void ThresholdGPU::run(const Image& image, Image& output, cl_event* kernelEvent)
         throw std::runtime_error("Image size does not match the GPU buffer");
     }
     checkCL(clEnqueueWriteBuffer(cl.queue, buffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 1, nullptr, &bufferSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
+    enqueueLine(cl.queue, kernel, bufferSize, kernelEvent);
     checkCL(clEnqueueReadBuffer(cl.queue, buffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
 }

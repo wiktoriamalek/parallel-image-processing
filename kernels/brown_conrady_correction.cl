@@ -26,8 +26,11 @@ __kernel void brown_conrady_correction(__global const unsigned char* input, __gl
     float distortedX = normalizedX * factor + tangentialX;
     float distortedY = normalizedY * factor + tangentialY;
 
-    float distortedPixelX = distortedX * scale + centerX;
-    float distortedPixelY = distortedY * scale + centerY;
+    float distortedRelativeX = distortedX * scale;
+    float distortedRelativeY = distortedY * scale;
+
+    float distortedPixelX = distortedRelativeX + centerX;
+    float distortedPixelY = distortedRelativeY + centerY;
 
     int destinationIndex = y * width + x;
 

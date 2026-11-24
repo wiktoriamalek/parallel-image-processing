@@ -5,11 +5,18 @@
 #else
 #include <CL/cl.h>
 #endif
+#include <cstddef>
 #include <string>
 #include <vector>
 
 void checkCL(cl_int error, const char* operation);
 double kernelTimeUs(cl_event event);
+
+constexpr std::size_t lineGroupSize = 256;
+constexpr std::size_t tileGroupSize = 16;
+std::size_t roundUp(std::size_t value, std::size_t multiple);
+void enqueueLine(cl_command_queue queue, cl_kernel kernel, std::size_t count, cl_event* event = nullptr);
+void enqueueTiles(cl_command_queue queue, cl_kernel kernel, std::size_t width, std::size_t height, cl_event* event = nullptr);
 
 class OpenCL {
 public:

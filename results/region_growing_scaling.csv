@@ -1,0 +1,6 @@
+image,width,height,seed_x,seed_y,tolerance,region_pixels,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us,gpu_iterations,gpu_different_pixels,gpu_naive_kernel_us,gpu_naive_total_us,gpu_naive_iterations,gpu_naive_different_pixels
+"images/nuclear.png",3543,2362,1771,1181,60,4700839,11,10,39417.7,28501.5,63.2915,19290.2,22017.2,80,0,1.12295e+06,2.61631e+06,4014,0
+"images/nuclear.png",3543,2362,0,0,255,8368566,11,5,36380.4,31402.8,54,11272.2,13865.9,112,0,1.46681e+06,3.67028e+06,5904,0
+"images/nuclear_noisy_2048.png",2048,1365,1024,682,60,1372524,11,20,15555,12141.8,69.271,13957.1,16216.5,96,0,-1,-1,-1,-1
+"images/mitsubishi_resolution_change/mitsubishi_16384.png",16384,16384,8192,8192,60,52780105,11,10,611093,277391,63.75,337748,360719,224,0,-1,-1,-1,-1
+"images/mitsubishi.png",1000,662,500,331,60,166022,11,20,625.729,1164.21,65.8335,1969.77,3060.4,32,0,21293.2,265064,963,0

@@ -2,6 +2,7 @@
 #include "image.hpp"
 #include "opencl_utils.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,8 @@ struct MedianNetwork {
     int size() const { return 2 * radius + 1; }
     int minMaxOperations() const;
     std::string openclDefinitions() const;
+    std::string cpuFunction(const std::string& name, int blocks = 1) const;
+    std::uint64_t fingerprint() const;
 };
 
 MedianNetwork buildMedianNetwork(MedianSort sort, int radius, int strip = 1);

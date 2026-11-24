@@ -12,11 +12,7 @@ kernel void brown_conrady_correction(
     constant float& k3 [[buffer(6)]],
     constant float& p1 [[buffer(7)]],
     constant float& p2 [[buffer(8)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     int x = gridPosition.x;
@@ -44,8 +40,11 @@ kernel void brown_conrady_correction(
     float distortedX = normalizedX * factor + tangentialX;
     float distortedY = normalizedY * factor + tangentialY;
 
-    float distortedPixelX = distortedX * scale + centerX;
-    float distortedPixelY = distortedY * scale + centerY;
+    float distortedRelativeX = distortedX * scale;
+    float distortedRelativeY = distortedY * scale;
+
+    float distortedPixelX = distortedRelativeX + centerX;
+    float distortedPixelY = distortedRelativeY + centerY;
 
     int destinationIndex = y * width + x;
 

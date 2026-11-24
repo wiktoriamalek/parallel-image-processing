@@ -9,15 +9,14 @@ kernel void convolution3x3(
     constant int& height [[buffer(3)]],
     device const float* filter [[buffer(4)]],
     constant int& absoluteValue [[buffer(5)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     int x = gridPosition.x;
     int y = gridPosition.y;
+    if (x >= width || y >= height) {
+        return;
+    }
 
     int index = y * width + x;
 
@@ -50,6 +49,6 @@ kernel void convolution3x3(
         }
 
     sum = clamp(sum, 0.0f, 255.0f);
-    output[index] = (unsigned char)sum;
+    output[index] = (unsigned char)round(sum);
 
 }

@@ -142,7 +142,7 @@ void ResizeGPU::run(const Image& image, Image& output, cl_event* kernelEvent) {
         throw std::runtime_error("Image dimensions do not match the GPU buffers");
     }
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, inputBufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
+    enqueueTiles(cl.queue, kernel, globalWorkSize[0], globalWorkSize[1], kernelEvent);
     checkCL(clFinish(cl.queue), "clFinish");
     checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, outputBufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
 }

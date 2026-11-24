@@ -1,12 +1,15 @@
 #include "main_window.hpp"
+#include "gabor.hpp"
 #include "image_io.hpp"
 #include "image_view.hpp"
 #include "median_filter.hpp"
+#include "theme.hpp"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -16,6 +19,8 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QScrollArea>
+#include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QTableWidget>
@@ -29,9 +34,39 @@
 #include <utility>
 
 namespace {
+class ParameterStack : public QStackedWidget {
+public:
+    ParameterStack() {
+        layout()->setSizeConstraint(QLayout::SetNoConstraint);
+        connect(this, &QStackedWidget::currentChanged, this, [this] { updateHeight(); });
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QStackedWidget::resizeEvent(event);
+        updateHeight();
+    }
+
+    bool event(QEvent* event) override {
+        const bool handled = QStackedWidget::event(event);
+        if (event->type() == QEvent::LayoutRequest) updateHeight();
+        return handled;
+    }
+
+private:
+    void updateHeight() {
+        QWidget* page = currentWidget();
+        if (!page) return;
+        const int wrapped = page->heightForWidth(width());
+        const int preferred = std::max(0, wrapped >= 0 ? wrapped : page->sizeHint().height());
+        if (minimumHeight() != preferred || maximumHeight() != preferred) setFixedHeight(preferred);
+    }
+};
+
 const char* algorithmNames[] = {"Progowanie", "Negatyw", "Kontrast", "Otsu", "Multi-Otsu", "Doliny histogramu",
                                 "Bernsen", "Niblack", "Sauvola", "Konwolucja 3×3", "Filtr medianowy",
-                                "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru", "Canny (krawędzie)"};
+                                "Korekcja dystorsji", "Zmiana rozmiaru", "Rozrost obszaru", "Canny (krawędzie)",
+                                "Filtr Gabora"};
 
 QImage toQImage(const Image& image) {
     return QImage(image.pixels.data(), image.width, image.height, image.width, QImage::Format_Grayscale8).copy();
@@ -53,6 +88,9 @@ QWidget* parameterPage(std::initializer_list<std::pair<QString, QWidget*>> rows)
     auto* page = new QWidget;
     auto* layout = new QFormLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setVerticalSpacing(8);
+    layout->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     for (const auto& [label, widget] : rows) {
         if (label.isEmpty()) layout->addRow(widget);
         else layout->addRow(label, widget);
@@ -72,47 +110,136 @@ QString thresholdsText(const Timing& timing) {
 QLabel* note(const QString& text) {
     auto* label = new QLabel(text);
     label->setWordWrap(true);
-    label->setStyleSheet("color: gray");
+    label->setObjectName("hint");
     return label;
 }
 }
 
 MainWindow::MainWindow() {
-    setWindowTitle("Przetwarzanie obrazów: CPU i GPU");
+    setWindowTitle("Przetwarzanie obrazów · CPU / GPU");
+    setMinimumSize(1120, 740);
+    applyTheme(*this);
 
     inputView = new ImageView;
+    inputView->setObjectName("inputPreview");
     outputView = new ImageView;
+    outputView->setObjectName("outputPreview");
+    inputView->setEmptyText("Wczytaj obraz do przetworzenia");
+    outputView->setEmptyText("Tutaj pojawi się wynik algorytmu");
     inputCaption = new QLabel("Obraz wejściowy");
     outputCaption = new QLabel("Wynik");
-    auto* imagesLayout = new QGridLayout;
-    imagesLayout->addWidget(inputCaption, 0, 0);
-    imagesLayout->addWidget(outputCaption, 0, 1);
-    imagesLayout->addWidget(inputView, 1, 0);
-    imagesLayout->addWidget(outputView, 1, 1);
-    imagesLayout->setRowStretch(1, 1);
+    auto previewCard = [](QLabel* caption, ImageView* view) {
+        auto* card = new QFrame;
+        card->setObjectName("previewCard");
+        caption->setObjectName("panelHeading");
+        caption->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        auto* layout = new QVBoxLayout(card);
+        layout->setContentsMargins(16, 16, 16, 16);
+        layout->setSpacing(14);
+        layout->addWidget(caption);
+        layout->addWidget(view, 1);
+        return card;
+    };
+    auto* previews = new QSplitter(Qt::Horizontal);
+    previews->setChildrenCollapsible(false);
+    previews->setHandleWidth(14);
+    previews->addWidget(previewCard(inputCaption, inputView));
+    previews->addWidget(previewCard(outputCaption, outputView));
+    previews->setStretchFactor(0, 1);
+    previews->setStretchFactor(1, 1);
 
     table = new QTableWidget(0, 6);
-    table->setHorizontalHeaderLabels({"Tryb", "Czas całkowity [ms]", "Same kernele GPU [ms]",
-                                      "Przyspieszenie względem CPU 1", "Wynik względem CPU 1", "Progi"});
+    table->setHorizontalHeaderLabels({"Tryb", "Całkowity [ms]", "Etapy GPU [ms]",
+                                      "Przyspieszenie", "Zgodność z CPU", "Progi"});
+    table->horizontalHeaderItem(3)->setToolTip("Przyspieszenie względem CPU z jednym wątkiem");
+    table->horizontalHeaderItem(4)->setToolTip("Porównanie z wynikiem CPU z jednym wątkiem");
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Fixed);
+    table->setColumnWidth(5, 110);
+    table->horizontalHeader()->setMinimumSectionSize(80);
+    table->horizontalHeader()->setHighlightSections(false);
     table->verticalHeader()->hide();
+    table->verticalHeader()->setDefaultSectionSize(40);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->setFixedHeight(190);
+    table->setAlternatingRowColors(true);
+    table->setShowGrid(false);
+    table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    table->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     connect(table, &QTableWidget::currentCellChanged, this, [this](int row) { showResult(row); });
 
-    auto* rightLayout = new QVBoxLayout;
-    rightLayout->addLayout(imagesLayout, 1);
-    rightLayout->addWidget(table);
+    auto* emptyResults = new QLabel("Uruchom pomiar, aby porównać wybrane tryby wykonania.");
+    emptyResults->setObjectName("emptyResults");
+    emptyResults->setAlignment(Qt::AlignCenter);
+    emptyResults->setWordWrap(true);
+    resultPages = new QStackedWidget;
+    resultPages->addWidget(emptyResults);
+    resultPages->addWidget(table);
 
+    auto* resultsCard = new QFrame;
+    resultsCard->setObjectName("resultsCard");
+    resultsCard->setMinimumHeight(190);
+    auto* resultsTitle = new QLabel("Wyniki pomiaru");
+    resultsTitle->setObjectName("panelHeading");
+    resultsInfo = new QLabel;
+    resultsInfo->setObjectName("fileInfo");
+    auto* resultsHeader = new QHBoxLayout;
+    resultsHeader->addWidget(resultsTitle);
+    resultsHeader->addStretch();
+    resultsHeader->addWidget(resultsInfo);
+    auto* resultsLayout = new QVBoxLayout(resultsCard);
+    resultsLayout->setContentsMargins(16, 16, 16, 12);
+    resultsLayout->setSpacing(14);
+    resultsLayout->addLayout(resultsHeader);
+    resultsLayout->addWidget(resultPages, 1);
+
+    workspaceSplitter = new QSplitter(Qt::Vertical);
+    workspaceSplitter->setChildrenCollapsible(false);
+    workspaceSplitter->setHandleWidth(14);
+    workspaceSplitter->addWidget(previews);
+    workspaceSplitter->addWidget(resultsCard);
+    workspaceSplitter->setStretchFactor(0, 3);
+    workspaceSplitter->setStretchFactor(1, 1);
+    workspaceSplitter->setSizes({520, 240});
+
+    QWidget* controls = createControls();
+    auto* title = new QLabel("Przetwarzanie obrazów");
+    title->setObjectName("appTitle");
+    fileInfo = new QLabel;
+    fileInfo->setObjectName("fileInfo");
+    fileInfo->setTextFormat(Qt::PlainText);
+    fileInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    fileInfo->hide();
+    auto* titleLayout = new QVBoxLayout;
+    titleLayout->setContentsMargins(0, 0, 0, 0);
+    titleLayout->setSpacing(5);
+    titleLayout->addWidget(title);
+    titleLayout->addWidget(fileInfo);
+    auto* topBar = new QWidget;
+    topBar->setObjectName("topBar");
+    auto* topLayout = new QHBoxLayout(topBar);
+    topLayout->setContentsMargins(0, 0, 0, 0);
+    topLayout->setSpacing(10);
+    topLayout->addLayout(titleLayout, 1);
+    topLayout->addWidget(openButton);
+    topLayout->addWidget(saveButton);
+
+    auto* body = new QHBoxLayout;
+    body->setSpacing(20);
+    body->addWidget(controls);
+    body->addWidget(workspaceSplitter, 1);
     auto* central = new QWidget;
-    auto* layout = new QHBoxLayout(central);
-    layout->addWidget(createControls());
-    layout->addLayout(rightLayout, 1);
+    central->setObjectName("appRoot");
+    auto* layout = new QVBoxLayout(central);
+    layout->setContentsMargins(24, 20, 24, 10);
+    layout->setSpacing(22);
+    layout->addWidget(topBar);
+    layout->addLayout(body, 1);
     setCentralWidget(central);
+    statusBar()->setSizeGripEnabled(false);
+    statusBar()->setContentsMargins(18, 0, 18, 0);
 
     inputView->setClickHandler([this](QPoint point) {
         if (currentAlgorithm() != Algorithm::RegionGrowing) return;
@@ -129,45 +256,45 @@ QWidget* MainWindow::createControls() {
     openButton = new QPushButton("Otwórz obraz…");
     connect(openButton, &QPushButton::clicked, this, &MainWindow::chooseImage);
 
-    algorithmBox = new QComboBox;
+    algorithmBox = new ThemeComboBox;
     for (const char* name : algorithmNames) algorithmBox->addItem(name);
 
-    thresholdSpin = new QSpinBox;
+    thresholdSpin = new ThemeSpinBox;
     thresholdSpin->setRange(0, 255);
     thresholdSpin->setValue(defaults.threshold);
-    contrastFactorSpin = new QDoubleSpinBox;
+    contrastFactorSpin = new ThemeDoubleSpinBox;
     contrastFactorSpin->setRange(-5.0, 5.0);
     contrastFactorSpin->setDecimals(2);
     contrastFactorSpin->setSingleStep(0.1);
     contrastFactorSpin->setValue(defaults.contrastFactor);
-    classesSpin = new QSpinBox;
+    classesSpin = new ThemeSpinBox;
     classesSpin->setRange(2, 16);
     classesSpin->setValue(defaults.classes);
-    maxClassesSpin = new QSpinBox;
+    maxClassesSpin = new ThemeSpinBox;
     maxClassesSpin->setRange(2, 16);
     maxClassesSpin->setValue(defaults.maxClasses);
-    radiusSpin = new QSpinBox;
+    radiusSpin = new ThemeSpinBox;
     radiusSpin->setRange(1, 50);
     radiusSpin->setValue(defaults.radius);
-    contrastSpin = new QSpinBox;
+    contrastSpin = new ThemeSpinBox;
     contrastSpin->setRange(0, 255);
     contrastSpin->setValue(defaults.minContrast);
-    localRadiusSpin = new QSpinBox;
+    localRadiusSpin = new ThemeSpinBox;
     localRadiusSpin->setRange(radiusSpin->minimum(), radiusSpin->maximum());
     localRadiusSpin->setValue(defaults.radius);
-    localThresholdKSpin = new QDoubleSpinBox;
+    localThresholdKSpin = new ThemeDoubleSpinBox;
     localThresholdKSpin->setRange(0.0, 1.0);
     localThresholdKSpin->setSingleStep(0.05);
     localThresholdKSpin->setValue(defaults.localThresholdK);
-    filterBox = new QComboBox;
+    filterBox = new ThemeComboBox;
     for (const auto& name : convolutionFilterNames()) filterBox->addItem(QString::fromStdString(name));
-    medianSortBox = new QComboBox;
+    medianSortBox = new ThemeComboBox;
     medianSortBox->addItems({"Sortowanie", "Sieć, jedno okno", "Sieć bitoniczna", "Sieć współdzielona"});
     medianSortBox->setCurrentIndex(defaults.medianSort);
-    medianWindowBox = new QComboBox;
+    medianWindowBox = new ThemeComboBox;
     for (int radius = 1; radius <= 7; ++radius) medianWindowBox->addItem(QString("%1 × %1").arg(2 * radius + 1));
     medianWindowBox->setCurrentIndex(defaults.medianRadius - 1);
-    medianStripSpin = new QSpinBox;
+    medianStripSpin = new ThemeSpinBox;
     medianStripSpin->setRange(1, 32);
     medianStripSpin->setValue(defaults.medianStrip);
     medianSwitchingCheck = new QCheckBox("Mediana przełączająca");
@@ -179,8 +306,8 @@ QWidget* MainWindow::createControls() {
         medianStripSpin->setValue(index == 0 ? 8 : 16);
     });
     medianStripSpin->setEnabled(static_cast<MedianSort>(defaults.medianSort) == MedianSort::Shared);
-    k1Spin = new QDoubleSpinBox;
-    k2Spin = new QDoubleSpinBox;
+    k1Spin = new ThemeDoubleSpinBox;
+    k2Spin = new ThemeDoubleSpinBox;
     for (auto* spin : {k1Spin, k2Spin}) {
         spin->setRange(-1.0, 1.0);
         spin->setDecimals(3);
@@ -188,13 +315,13 @@ QWidget* MainWindow::createControls() {
     }
     k1Spin->setValue(defaults.k1);
     k2Spin->setValue(defaults.k2);
-    k3Spin = new QDoubleSpinBox;
+    k3Spin = new ThemeDoubleSpinBox;
     k3Spin->setRange(-1.0, 1.0);
     k3Spin->setDecimals(3);
     k3Spin->setSingleStep(0.01);
     k3Spin->setValue(defaults.k3);
-    p1Spin = new QDoubleSpinBox;
-    p2Spin = new QDoubleSpinBox;
+    p1Spin = new ThemeDoubleSpinBox;
+    p2Spin = new ThemeDoubleSpinBox;
     for (auto* spin : {p1Spin, p2Spin}) {
         spin->setRange(-0.2, 0.2);
         spin->setDecimals(4);
@@ -202,35 +329,37 @@ QWidget* MainWindow::createControls() {
     }
     p1Spin->setValue(defaults.p1);
     p2Spin->setValue(defaults.p2);
-    distortionModelBox = new QComboBox;
+    distortionModelBox = new ThemeComboBox;
     distortionModelBox->addItems({"Radialny (k1, k2)", "Brown–Conrady (k1, k2, k3, p1, p2)"});
     distortionModelBox->setCurrentIndex(defaults.distortionModel);
+    distortionModelBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    distortionModelBox->setMinimumContentsLength(12);
     auto updateDistortionModel = [this](int model) {
         for (auto* spin : {k3Spin, p1Spin, p2Spin}) spin->setEnabled(model == 1);
     };
     connect(distortionModelBox, &QComboBox::currentIndexChanged, this, updateDistortionModel);
     updateDistortionModel(defaults.distortionModel);
-    interpolationBox = new QComboBox;
+    interpolationBox = new ThemeComboBox;
     interpolationBox->addItems({"Najbliższy sąsiad", "Dwuliniowa"});
     interpolationBox->setCurrentIndex(defaults.bilinear ? 1 : 0);
-    scaleSpin = new QDoubleSpinBox;
+    scaleSpin = new ThemeDoubleSpinBox;
     scaleSpin->setRange(0.05, 4.0);
     scaleSpin->setDecimals(2);
     scaleSpin->setSingleStep(0.25);
     scaleSpin->setValue(defaults.scale);
-    seedXSpin = new QSpinBox;
-    seedYSpin = new QSpinBox;
+    seedXSpin = new ThemeSpinBox;
+    seedYSpin = new ThemeSpinBox;
     for (auto* spin : {seedXSpin, seedYSpin}) {
         spin->setRange(0, 0);
         connect(spin, &QSpinBox::valueChanged, this, &MainWindow::updateSeedMarker);
     }
-    toleranceSpin = new QSpinBox;
+    toleranceSpin = new ThemeSpinBox;
     toleranceSpin->setRange(0, 255);
     toleranceSpin->setValue(defaults.tolerance);
     localTilesCheck = new QCheckBox("GPU: kafelki w pamięci lokalnej");
     localTilesCheck->setChecked(defaults.localTiles);
-    cannyLowSpin = new QDoubleSpinBox;
-    cannyHighSpin = new QDoubleSpinBox;
+    cannyLowSpin = new ThemeDoubleSpinBox;
+    cannyHighSpin = new ThemeDoubleSpinBox;
     for (auto* spin : {cannyLowSpin, cannyHighSpin}) {
         spin->setRange(0.0, 1500.0);
         spin->setDecimals(1);
@@ -238,8 +367,42 @@ QWidget* MainWindow::createControls() {
     }
     cannyLowSpin->setValue(defaults.cannyLow);
     cannyHighSpin->setValue(defaults.cannyHigh);
+    gaborSigmaSpin = new ThemeDoubleSpinBox;
+    gaborSigmaSpin->setRange(0.3, 10.0);
+    gaborSigmaSpin->setDecimals(2);
+    gaborSigmaSpin->setSingleStep(0.25);
+    gaborSigmaSpin->setValue(defaults.gaborSigma);
+    gaborWavelengthSpin = new ThemeDoubleSpinBox;
+    gaborWavelengthSpin->setRange(2.0, 64.0);
+    gaborWavelengthSpin->setDecimals(1);
+    gaborWavelengthSpin->setSingleStep(0.5);
+    gaborWavelengthSpin->setValue(defaults.gaborWavelength);
+    gaborGammaSpin = new ThemeDoubleSpinBox;
+    gaborGammaSpin->setRange(0.1, 2.0);
+    gaborGammaSpin->setDecimals(2);
+    gaborGammaSpin->setSingleStep(0.05);
+    gaborGammaSpin->setValue(defaults.gaborGamma);
+    gaborOrientationsSpin = new ThemeSpinBox;
+    gaborOrientationsSpin->setRange(1, gaborMaxOrientations);
+    gaborOrientationsSpin->setValue(defaults.gaborOrientations);
+    gaborWindowLabel = note("");
+    auto updateGaborWindow = [this] {
+        const int radius = gaborRadius(static_cast<float>(gaborSigmaSpin->value()), static_cast<float>(gaborGammaSpin->value()));
+        const int size = 2 * radius + 1;
+        const int orientations = gaborOrientationsSpin->value();
+        if (radius > gaborMaxRadius) {
+            gaborWindowLabel->setText(QString("Okno %1 × %1 jest za duże, maksymalnie %2 × %2: zmniejsz σ albo zwiększ γ.")
+                                          .arg(size).arg(2 * gaborMaxRadius + 1));
+        } else {
+            gaborWindowLabel->setText(QString("Okno %1 × %1: %2 orientacje × 2 maski × %3 = %4 mnożeń na piksel.")
+                                          .arg(size).arg(orientations).arg(size * size).arg(2 * size * size * orientations));
+        }
+    };
+    for (auto* spin : {gaborSigmaSpin, gaborGammaSpin}) connect(spin, &QDoubleSpinBox::valueChanged, this, updateGaborWindow);
+    connect(gaborOrientationsSpin, &QSpinBox::valueChanged, this, updateGaborWindow);
+    updateGaborWindow();
 
-    parameterPages = new QStackedWidget;
+    parameterPages = new ParameterStack;
     std::vector<int> algorithmPages;
     auto addPage = [&](QWidget* page, int algorithms = 1) {
         algorithmPages.insert(algorithmPages.end(), algorithms, parameterPages->addWidget(page));
@@ -280,39 +443,54 @@ QWidget* MainWindow::createControls() {
         {"", note("Gauss 3×3 → Sobel (moduł i kierunek) → tłumienie niemaksymalne → podwójny próg → histereza. "
                   "Progi dotyczą modułu gradientu Sobela (0…1442). Piksel powyżej progu górnego jest krawędzią, "
                   "między progami tylko wtedy, gdy łączy się z krawędzią.")}}));
+    addPage(parameterPage({{"σ (szerokość obwiedni)", gaborSigmaSpin}, {"λ (długość fali, px)", gaborWavelengthSpin},
+        {"γ (spłaszczenie obwiedni)", gaborGammaSpin}, {"Liczba orientacji", gaborOrientationsSpin}, {"", gaborWindowLabel},
+        {"", note("Dla każdej orientacji θ = kπ/N obraz jest splatany z parą masek: kosinusową i sinusową. "
+                  "Wynikiem jest największy moduł odpowiedzi √(parzysta² + nieparzysta²) po wszystkich orientacjach, "
+                  "obcięty do 0…255. Promień okna r = ⌈3σ / min(γ, 1)⌉, piksele spoza obrazu powielają brzeg.")}}));
     connect(algorithmBox, &QComboBox::currentIndexChanged, this, [this, algorithmPages](int index) {
         parameterPages->setCurrentIndex(algorithmPages.at(index));
+        parameterPages->updateGeometry();
     });
     connect(algorithmBox, &QComboBox::currentIndexChanged, this, &MainWindow::updateSeedMarker);
 
     auto* algorithmGroup = new QGroupBox("Algorytm");
+    algorithmGroup->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     auto* algorithmLayout = new QVBoxLayout(algorithmGroup);
+    algorithmLayout->setContentsMargins(0, 0, 0, 0);
+    algorithmLayout->setSpacing(14);
     algorithmLayout->addWidget(algorithmBox);
     algorithmLayout->addWidget(parameterPages);
 
     cpu1Check = new QCheckBox("CPU, 1 wątek");
     cpuNCheck = new QCheckBox("CPU, wątków:");
     cpuDynamicCheck = new QCheckBox("CPU, podział dynamiczny");
-    gpuBackendBox = new QComboBox;
+    gpuBackendBox = new ThemeComboBox;
+    gpuBackendBox->setObjectName("gpuBackend");
     gpuBackendBox->addItem("OpenCL");
 #ifdef __APPLE__
     gpuBackendBox->addItem("Metal");
+    gpuBackendBox->addItem("OpenCL i Metal");
 #endif
     gpuCheck = new QCheckBox("GPU");
     gpuZeroCopyCheck = new QCheckBox("GPU (OpenCL), zero-copy");
     for (auto* check : {cpu1Check, cpuNCheck, cpuDynamicCheck, gpuCheck, gpuZeroCopyCheck}) check->setChecked(true);
-    threadsSpin = new QSpinBox;
+    threadsSpin = new ThemeSpinBox;
     threadsSpin->setRange(2, 256);
     threadsSpin->setValue(std::max(2u, std::thread::hardware_concurrency()));
-    repeatsSpin = new QSpinBox;
+    repeatsSpin = new ThemeSpinBox;
     repeatsSpin->setRange(1, 1000);
     repeatsSpin->setValue(10);
 
     auto* threadsRow = new QHBoxLayout;
     threadsRow->addWidget(cpuNCheck);
     threadsRow->addWidget(threadsSpin);
-    auto* modesGroup = new QGroupBox("Tryby");
+    auto* modesGroup = new QGroupBox("Tryby wykonania");
+    modesGroup->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     auto* modesLayout = new QFormLayout(modesGroup);
+    modesLayout->setContentsMargins(0, 0, 0, 0);
+    modesLayout->setVerticalSpacing(10);
+    modesLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     modesLayout->addRow(cpu1Check);
     modesLayout->addRow(threadsRow);
     modesLayout->addRow(cpuDynamicCheck);
@@ -320,33 +498,45 @@ QWidget* MainWindow::createControls() {
     modesLayout->addRow(gpuCheck);
     modesLayout->addRow(gpuZeroCopyCheck);
     modesLayout->addRow("Powtórzenia", repeatsSpin);
-    modesLayout->addRow(note("Czas to mediana z powtórzeń. Podział dynamiczny: tyle samo wątków, ale pobierają "
-                             "małe kawałki obrazu, więc rdzenie wydajne robią więcej. Zero-copy: te same kernele "
-                             "bez kopiowania obrazu (wspólna pamięć CPU i GPU), dla Multi-Otsu i dolin."));
+    repeatsSpin->setToolTip("Czas to mediana z powtórzeń po rozgrzewce.");
+    cpuDynamicCheck->setToolTip("Te same wątki pobierają małe kawałki obrazu, więc rdzenie wydajne robią więcej.");
+    gpuZeroCopyCheck->setToolTip("Wspólna pamięć CPU i GPU dla Multi-Otsu i dolin histogramu.");
     auto updateZeroCopy = [this] {
-        gpuZeroCopyCheck->setEnabled(gpuBackendBox->currentIndex() == 0 && supportsZeroCopy(currentAlgorithm()));
+        gpuZeroCopyCheck->setEnabled(gpuBackendBox->currentIndex() != 1 && supportsZeroCopy(currentAlgorithm()));
     };
     connect(algorithmBox, &QComboBox::currentIndexChanged, this, updateZeroCopy);
     connect(gpuBackendBox, &QComboBox::currentIndexChanged, this, updateZeroCopy);
     updateZeroCopy();
 
     runButton = new QPushButton("Uruchom");
+    runButton->setObjectName("runButton");
     runButton->setEnabled(false);
     connect(runButton, &QPushButton::clicked, this, &MainWindow::run);
     saveButton = new QPushButton("Zapisz wynik…");
     saveButton->setEnabled(false);
     connect(saveButton, &QPushButton::clicked, this, &MainWindow::saveResult);
 
+    threadsSpin->setMaximumWidth(86);
+    auto* settings = new QWidget;
+    auto* settingsLayout = new QVBoxLayout(settings);
+    settingsLayout->setContentsMargins(0, 0, 8, 0);
+    settingsLayout->setSpacing(24);
+    settingsLayout->addWidget(algorithmGroup);
+    settingsLayout->addWidget(modesGroup);
+    settingsLayout->addStretch();
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setWidget(settings);
     auto* panel = new QWidget;
-    panel->setFixedWidth(300);
+    panel->setObjectName("sidebar");
+    panel->setFixedWidth(336);
     auto* layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(openButton);
-    layout->addWidget(algorithmGroup);
-    layout->addWidget(modesGroup);
+    layout->setContentsMargins(20, 18, 14, 18);
+    layout->setSpacing(20);
+    layout->addWidget(scroll, 1);
     layout->addWidget(runButton);
-    layout->addWidget(saveButton);
-    layout->addStretch();
+
     return panel;
 }
 
@@ -358,8 +548,10 @@ void MainWindow::openImage(const QString& path) {
         return;
     }
     inputView->setImage(toQImage(input));
-    inputCaption->setText(QString("Obraz wejściowy: %1 (%2 × %3 px)")
-                              .arg(QFileInfo(path).fileName()).arg(input.width).arg(input.height));
+    fileInfo->setText(QFileInfo(path).fileName());
+    fileInfo->setToolTip(QFileInfo(path).absoluteFilePath());
+    fileInfo->show();
+    inputCaption->setText(QString("Obraz wejściowy · %1 × %2 px").arg(input.width).arg(input.height));
     seedXSpin->setRange(0, input.width - 1);
     seedYSpin->setRange(0, input.height - 1);
     seedXSpin->setValue(input.width / 2);
@@ -367,6 +559,8 @@ void MainWindow::openImage(const QString& path) {
     updateSeedMarker();
     results.clear();
     table->setRowCount(0);
+    resultPages->setCurrentIndex(0);
+    resultsInfo->clear();
     outputView->setImage(QImage());
     outputCaption->setText("Wynik");
     runButton->setEnabled(true);
@@ -403,8 +597,9 @@ void MainWindow::run() {
         modes.emplace_back(Mode::CPUNDynamic, QString("CPU, %1 wątków, dynamiczny").arg(threadsSpin->value()));
     }
     if (gpuCheck->isChecked()) {
-        const bool metal = gpuBackendBox->currentIndex() == 1;
-        modes.emplace_back(metal ? Mode::Metal : Mode::GPU, "GPU (" + gpuBackendBox->currentText() + ")");
+        const int backend = gpuBackendBox->currentIndex();
+        if (backend != 1) modes.emplace_back(Mode::GPU, "GPU (OpenCL)");
+        if (backend != 0) modes.emplace_back(Mode::Metal, "GPU (Metal)");
     }
     if (gpuZeroCopyCheck->isChecked() && gpuZeroCopyCheck->isEnabled()) {
         modes.emplace_back(Mode::GPUZeroCopy, "GPU (OpenCL), zero-copy");
@@ -414,6 +609,7 @@ void MainWindow::run() {
         return;
     }
 
+    runDescription = QString("%1 · mediana, n = %2").arg(algorithmNames[static_cast<int>(algorithm)]).arg(repeatsSpin->value());
     setRunning(true);
     statusBar()->showMessage("Liczenie…");
     watcher.setFuture(QtConcurrent::run([image = input, algorithm, parameters = currentParameters(),
@@ -441,6 +637,11 @@ void MainWindow::runFinished() {
         return;
     }
     results = std::move(outcome.results);
+    resultPages->setCurrentIndex(1);
+    resultsInfo->setText(runDescription);
+    const auto fastest = std::min_element(results.begin(), results.end(), [](const ModeResult& a, const ModeResult& b) {
+        return a.timing.totalUs < b.timing.totalUs;
+    });
 
     auto reference = std::find_if(results.begin(), results.end(),
                                   [](const ModeResult& result) { return result.mode == Mode::CPU1; });
@@ -457,9 +658,23 @@ void MainWindow::runFinished() {
         QStringList cells = {result.name, milliseconds(result.timing.totalUs), kernel, speedup, comparison,
                              thresholdsText(result.timing)};
         for (int column = 0; column < cells.size(); ++column) {
-            table->setItem(row, column, new QTableWidgetItem(cells[column]));
+            auto* item = new QTableWidgetItem(cells[column]);
+            if (column >= 4) item->setToolTip(cells[column]);
+            if (column >= 1 && column <= 3) item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            if (column == 4 && comparison == "identyczny") item->setForeground(QColor("#7ad8bd"));
+            if (column == 1 && &result == &*fastest) {
+                QFont font = item->font();
+                font.setBold(true);
+                item->setFont(font);
+                item->setForeground(QColor("#7ad8bd"));
+                item->setToolTip("Najkrótszy czas całkowity w tym pomiarze");
+            }
+            table->setItem(row, column, item);
         }
     }
+    const int resultsHeight = std::min(std::clamp(108 + static_cast<int>(results.size()) * 40, 190, 350),
+                                       workspaceSplitter->height() / 2);
+    workspaceSplitter->setSizes({workspaceSplitter->height() - resultsHeight, resultsHeight});
     int last = static_cast<int>(results.size()) - 1;
     table->selectRow(last);
     showResult(last);
@@ -471,14 +686,14 @@ void MainWindow::showResult(int row) {
     if (row < 0 || row >= static_cast<int>(results.size())) return;
     const ModeResult& result = results[row];
     outputView->setImage(toQImage(result.output));
-    outputCaption->setText(QString("Wynik: %1 (%2 × %3 px)").arg(result.name).arg(result.output.width)
-                               .arg(result.output.height));
+    outputCaption->setText(QString("%1 · %2 × %3 px").arg(result.name).arg(result.output.width).arg(result.output.height));
 }
 
 void MainWindow::setRunning(bool running) {
     openButton->setEnabled(!running);
     gpuBackendBox->setEnabled(!running);
     runButton->setEnabled(!running);
+    runButton->setText(running ? "Obliczanie…" : "Uruchom");
     saveButton->setEnabled(!running && !results.empty());
 }
 
@@ -522,5 +737,9 @@ Parameters MainWindow::currentParameters() const {
     parameters.localTiles = localTilesCheck->isChecked();
     parameters.cannyLow = static_cast<float>(cannyLowSpin->value());
     parameters.cannyHigh = static_cast<float>(cannyHighSpin->value());
+    parameters.gaborSigma = static_cast<float>(gaborSigmaSpin->value());
+    parameters.gaborWavelength = static_cast<float>(gaborWavelengthSpin->value());
+    parameters.gaborGamma = static_cast<float>(gaborGammaSpin->value());
+    parameters.gaborOrientations = gaborOrientationsSpin->value();
     return parameters;
 }

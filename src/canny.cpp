@@ -28,79 +28,91 @@ int squaredThreshold(float threshold) {
     return static_cast<int>(std::min(squared, static_cast<double>(largestSquaredMagnitude) + 1.0));
 }
 
+void gaussRow(const Image& image, int y, unsigned char* blurred) {
+    const int width = image.width;
+    const unsigned char* row = image.pixels.data() + static_cast<std::size_t>(y) * width;
+    if (y == 0 || y == image.height - 1 || width < 3) {
+        std::copy_n(row, width, blurred);
+        return;
+    }
+    const unsigned char* up = row - width;
+    const unsigned char* down = row + width;
+    blurred[0] = row[0];
+    blurred[width - 1] = row[width - 1];
+    for (int x = 1; x < width - 1; ++x) {
+        const int sum = up[x - 1] + 2 * up[x] + up[x + 1] + 2 * row[x - 1] + 4 * row[x] + 2 * row[x + 1] +
+                        down[x - 1] + 2 * down[x] + down[x + 1];
+        blurred[x] = static_cast<unsigned char>((sum + 8) >> 4);
+    }
+}
+
 void gaussRows(const Image& image, Image& blurred, int firstRow, int endRow) {
+    for (int y = firstRow; y < endRow; ++y) gaussRow(image, y, blurred.pixels.data() + static_cast<std::size_t>(y) * image.width);
+}
+
+void gradientRow(const unsigned char* up, const unsigned char* row, const unsigned char* down, int width, int* magnitude,
+                 unsigned char* direction) {
+    magnitude[0] = 0;
+    direction[0] = 0;
+    magnitude[width - 1] = 0;
+    direction[width - 1] = 0;
+    for (int x = 1; x < width - 1; ++x) {
+        const int gx = (up[x + 1] + 2 * row[x + 1] + down[x + 1]) - (up[x - 1] + 2 * row[x - 1] + down[x - 1]);
+        const int gy = (down[x - 1] + 2 * down[x] + down[x + 1]) - (up[x - 1] + 2 * up[x] + up[x + 1]);
+        const int ax = std::abs(gx);
+        const int ay = std::abs(gy);
+        const unsigned char diagonal = (gx > 0) == (gy > 0) ? 1 : 3;
+        const unsigned char steep = ax * fixedPointOne <= tanOf22_5Degrees * ay ? 2 : diagonal;
+        magnitude[x] = gx * gx + gy * gy;
+        direction[x] = ay * fixedPointOne < tanOf22_5Degrees * ax ? 0 : steep;
+    }
+}
+
+void suppressRow(const int* up, const int* row, const int* down, const unsigned char* direction, int width, int lowSquared,
+                 int highSquared, unsigned char* state) {
+    state[0] = 0;
+    state[width - 1] = 0;
+    for (int x = 1; x < width - 1; ++x) {
+        const int candidate = row[x];
+        if (candidate < lowSquared) {
+            state[x] = 0;
+            continue;
+        }
+        const unsigned char sector = direction[x];
+        const int before = sector == 0 ? row[x - 1] : sector == 1 ? up[x - 1] : sector == 2 ? up[x] : up[x + 1];
+        const int after = sector == 0 ? row[x + 1] : sector == 1 ? down[x + 1] : sector == 2 ? down[x] : down[x - 1];
+        const unsigned char edge = candidate >= highSquared ? strongEdge : weakEdge;
+        state[x] = candidate > before && candidate >= after ? edge : 0;
+    }
+}
+
+void cannyBand(const Image& image, std::vector<unsigned char>& state, int lowSquared, int highSquared, int firstRow, int endRow) {
     const int width = image.width;
     const int height = image.height;
     for (int y = firstRow; y < endRow; ++y) {
-        const std::size_t rowStart = static_cast<std::size_t>(y) * width;
-        if (y == 0 || y == height - 1 || width < 3) {
-            std::copy_n(&image.pixels[rowStart], width, &blurred.pixels[rowStart]);
-            continue;
-        }
-        blurred.pixels[rowStart] = image.pixels[rowStart];
-        blurred.pixels[rowStart + width - 1] = image.pixels[rowStart + width - 1];
-        for (int x = 1; x < width - 1; ++x) {
-            const unsigned char* p = &image.pixels[rowStart + x];
-            const int sum = p[-width - 1] + 2 * p[-width] + p[-width + 1] +
-                            2 * p[-1] + 4 * p[0] + 2 * p[1] +
-                            p[width - 1] + 2 * p[width] + p[width + 1];
-            blurred.pixels[rowStart + x] = static_cast<unsigned char>((sum + 8) / 16);
-        }
+        if (y == 0 || y == height - 1) std::fill_n(state.data() + static_cast<std::size_t>(y) * width, width, 0);
     }
-}
-
-unsigned char gradientSector(int gx, int gy) {
-    const int ax = std::abs(gx);
-    const int ay = std::abs(gy);
-    if (ay * fixedPointOne < tanOf22_5Degrees * ax) return 0;
-    if (ax * fixedPointOne <= tanOf22_5Degrees * ay) return 2;
-    return (gx > 0) == (gy > 0) ? 1 : 3;
-}
-
-void gradientRows(const Image& blurred, std::vector<int>& magnitude, std::vector<unsigned char>& direction,
-                  int firstRow, int endRow) {
-    const int width = blurred.width;
-    const int height = blurred.height;
-    for (int y = firstRow; y < endRow; ++y) {
-        const std::size_t rowStart = static_cast<std::size_t>(y) * width;
-        for (int x = 0; x < width; ++x) {
-            const std::size_t pix_idx = rowStart + x;
-            if (x == 0 || y == 0 || x == width - 1 || y == height - 1) {
-                magnitude[pix_idx] = 0;
-                direction[pix_idx] = 0;
-                continue;
-            }
-            const unsigned char* p = &blurred.pixels[pix_idx];
-            // intensity change in both axes
-            const int gx = (p[-width + 1] + 2 * p[1] + p[width + 1]) - (p[-width - 1] + 2 * p[-1] + p[width - 1]);
-            const int gy = (p[width - 1] + 2 * p[width] + p[width + 1]) - (p[-width - 1] + 2 * p[-width] + p[-width + 1]);
-            magnitude[pix_idx] = gx * gx + gy * gy;
-            direction[pix_idx] = gradientSector(gx, gy);
+    const int first = std::max(firstRow, 1);
+    const int last = std::min(endRow, height - 1);
+    if (first >= last) return;
+    std::vector<unsigned char> blurred(3 * static_cast<std::size_t>(width));
+    std::vector<int> magnitude(3 * static_cast<std::size_t>(width));
+    std::vector<unsigned char> direction(3 * static_cast<std::size_t>(width));
+    auto slot = [width](int row) { return static_cast<std::size_t>(row % 3) * width; };
+    int nextBlurred = std::max(first - 2, 0);
+    for (int row = first - 1; row <= last; ++row) {
+        if (row == 0 || row == height - 1) {
+            std::fill_n(magnitude.data() + slot(row), width, 0);
+            std::fill_n(direction.data() + slot(row), width, 0);
+        } else {
+            for (; nextBlurred <= row + 1; ++nextBlurred) gaussRow(image, nextBlurred, blurred.data() + slot(nextBlurred));
+            gradientRow(blurred.data() + slot(row - 1), blurred.data() + slot(row), blurred.data() + slot(row + 1), width,
+                        magnitude.data() + slot(row), direction.data() + slot(row));
         }
-    }
-}
-
-void suppressRows(const std::vector<int>& magnitude, const std::vector<unsigned char>& direction,
-                  std::vector<unsigned char>& state, int width, int height, int lowSquared, int highSquared,
-                  int firstRow, int endRow) {
-    const std::ptrdiff_t offsets[4] = {1, width + 1, width, width - 1};
-    for (int y = firstRow; y < endRow; ++y) {
-        const std::size_t rowStart = static_cast<std::size_t>(y) * width;
-        for (int x = 0; x < width; ++x) {
-            const std::size_t pix_idx = rowStart + x;
-            if (x == 0 || y == 0 || x == width - 1 || y == height - 1) {
-                state[pix_idx] = 0;
-                continue;
-            }
-            // non-maximum suppression - choosing locally strongest response diagonally
-            const std::ptrdiff_t offset = offsets[direction[pix_idx]];
-            const int candidate = magnitude[pix_idx];
-            unsigned char value = 0;
-            if (candidate > magnitude[pix_idx - offset] && candidate >= magnitude[pix_idx + offset]) {
-                if (candidate >= highSquared) value = strongEdge;
-                else if (candidate >= lowSquared) value = weakEdge;
-            }
-            state[pix_idx] = value;
+        const int y = row - 1;
+        if (y >= first && y < last) {
+            suppressRow(magnitude.data() + slot(y - 1), magnitude.data() + slot(y), magnitude.data() + slot(y + 1),
+                        direction.data() + slot(y), width, lowSquared, highSquared, state.data() + static_cast<std::size_t>(y) * width);
         }
     }
 }
@@ -137,8 +149,10 @@ void trackEdges(std::vector<unsigned char>& state, int width, int height, int th
         for (std::size_t band = begin; band < end; ++band) {
             const std::size_t first = static_cast<std::size_t>(bandStart(band)) * width;
             const std::size_t last = static_cast<std::size_t>(bandStart(band + 1)) * width;
-            for (std::size_t i = first; i < last; ++i) {
-                if (state[i] == strongEdge) stack.push_back(i);
+            const auto begin = state.begin() + static_cast<std::ptrdiff_t>(first);
+            const auto end = state.begin() + static_cast<std::ptrdiff_t>(last);
+            for (auto edge = std::find(begin, end, strongEdge); edge != end; edge = std::find(edge + 1, end, strongEdge)) {
+                stack.push_back(static_cast<std::size_t>(edge - state.begin()));
             }
             trackRows(state, width, bandStart(band), bandStart(band + 1), stack);
         }
@@ -206,25 +220,18 @@ void canny(const Image& image, Image& result, float lowThreshold, float highThre
     const int height = image.height;
     const int lowSquared = squaredThreshold(lowThreshold);
     const int highSquared = squaredThreshold(highThreshold);
-    Image blurred_image = image;
-    std::vector<int> magnitude(image.pixels.size());
-    std::vector<unsigned char> direction(image.pixels.size());
     std::vector<unsigned char>& state = result.pixels;
     auto rows = [&](auto step) {
         parallelRanges(height, threads, [&](std::size_t begin, std::size_t end, int) {
             step(static_cast<int>(begin), static_cast<int>(end));
         });
     };
-    rows([&](int first, int end) { gaussRows(image, blurred_image, first, end); });
-    rows([&](int first, int end) { gradientRows(blurred_image, magnitude, direction, first, end); });
-    rows([&](int first, int end) {
-        suppressRows(magnitude, direction, state, width, height, lowSquared, highSquared, first, end);
-    });
+    rows([&](int first, int end) { cannyBand(image, state, lowSquared, highSquared, first, end); });
     trackEdges(state, width, height, threads);
     rows([&](int first, int end) {
-        for (std::size_t i = static_cast<std::size_t>(first) * width; i < static_cast<std::size_t>(end) * width; ++i) {
-            if (state[i] == weakEdge) state[i] = 0;
-        }
+        unsigned char* pixels = state.data();
+        const std::size_t stop = static_cast<std::size_t>(end) * width;
+        for (std::size_t i = static_cast<std::size_t>(first) * width; i < stop; ++i) pixels[i] = pixels[i] == weakEdge ? 0 : pixels[i];
     });
 }
 
@@ -347,9 +354,11 @@ void CannyGPU::run(const Image& image, Image& output, double* kernelUs) {
     const std::size_t tileLocalWorkSize[2] = {trackGroup, trackGroup};
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_FALSE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr),
             "clEnqueueWriteBuffer");
-    launch(gaussKernel, globalWorkSize, nullptr, kernelUs);
-    launch(gradientKernel, globalWorkSize, nullptr, kernelUs);
-    launch(suppressKernel, globalWorkSize, nullptr, kernelUs);
+    const std::size_t pixelGlobal[2] = {roundUp(globalWorkSize[0], tileGroupSize), roundUp(globalWorkSize[1], tileGroupSize)};
+    const std::size_t pixelLocal[2] = {tileGroupSize, tileGroupSize};
+    launch(gaussKernel, pixelGlobal, pixelLocal, kernelUs);
+    launch(gradientKernel, pixelGlobal, pixelLocal, kernelUs);
+    launch(suppressKernel, pixelGlobal, pixelLocal, kernelUs);
     const cl_int one = 1;
     checkCL(clEnqueueFillBuffer(cl.queue, activeBufferA, &one, sizeof(one), 0,
                                 static_cast<std::size_t>(tilesX) * tilesY * sizeof(cl_int), 0, nullptr, nullptr),
@@ -370,7 +379,7 @@ void CannyGPU::run(const Image& image, Image& output, double* kernelUs) {
         ++iterationCount;
         if (kernelUs) addKernelTimes(kernelUs);
     }
-    launch(finishKernel, globalWorkSize, nullptr, kernelUs);
+    launch(finishKernel, pixelGlobal, pixelLocal, kernelUs);
     checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr),
             "clEnqueueReadBuffer");
     if (kernelUs) addKernelTimes(kernelUs);

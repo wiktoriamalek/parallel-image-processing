@@ -1,0 +1,7 @@
+api,compilation,local_x,local_y,kernel_us
+OpenCL,"runtime, default options",16,16,1088.125
+Metal,"runtime, MTLMathModeSafe and precise functions",16,16,1334.938
+Metal,"runtime, default options",16,16,1334.875
+Metal,"offline, project flags (-O2 -fno-fast-math -ffp-contract=on)",16,16,1322.896
+Metal,"offline, -O2",16,16,1334.917
+Metal,"offline, -Os",16,16,1621.250

@@ -2,6 +2,9 @@ __kernel void convolution3x3(__global const unsigned char* input, __global unsig
 {
     int x = get_global_id(0);
     int y = get_global_id(1);
+    if (x >= width || y >= height) {
+        return;
+    }
 
     int index = y * width + x;
 
@@ -42,7 +45,7 @@ __kernel void convolution3x3(__global const unsigned char* input, __global unsig
 
 
     sum = clamp(sum, 0.0f, 255.0f);
-    output[index] = (unsigned char)sum;
+    output[index] = (unsigned char)round(sum);
 
 
 }

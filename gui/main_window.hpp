@@ -13,6 +13,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
 class QSpinBox;
+class QSplitter;
 class QStackedWidget;
 class QTableWidget;
 
@@ -55,6 +56,11 @@ private:
     ImageView* outputView;
     QLabel* inputCaption;
     QLabel* outputCaption;
+    QLabel* fileInfo;
+    QLabel* resultsInfo;
+    QStackedWidget* resultPages;
+    QSplitter* workspaceSplitter;
+    QString runDescription;
     QTableWidget* table;
 
     QPushButton* openButton;
@@ -89,6 +95,11 @@ private:
     QCheckBox* localTilesCheck;
     QDoubleSpinBox* cannyLowSpin;
     QDoubleSpinBox* cannyHighSpin;
+    QDoubleSpinBox* gaborSigmaSpin;
+    QDoubleSpinBox* gaborWavelengthSpin;
+    QDoubleSpinBox* gaborGammaSpin;
+    QSpinBox* gaborOrientationsSpin;
+    QLabel* gaborWindowLabel;
     QCheckBox* cpu1Check;
     QCheckBox* cpuNCheck;
     QCheckBox* cpuDynamicCheck;

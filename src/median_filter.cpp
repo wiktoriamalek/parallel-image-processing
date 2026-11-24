@@ -2,6 +2,9 @@
 #include <array>
 #include <algorithm>
 #include <cstring>
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -240,25 +243,141 @@ std::vector<MedianNetwork::Step> orderByLayers(const MedianNetwork& network) {
 constexpr int medianLanes = 16;
 using Lanes = std::array<unsigned char, medianLanes>;
 
+#if defined(__ARM_NEON)
+using MedianVector = uint8x16_t;
+inline MedianVector medianLoad(const unsigned char* source) { return vld1q_u8(source); }
+inline void medianStore(unsigned char* target, MedianVector value) { vst1q_u8(target, value); }
+inline MedianVector medianMin(MedianVector a, MedianVector b) { return vminq_u8(a, b); }
+inline MedianVector medianMax(MedianVector a, MedianVector b) { return vmaxq_u8(a, b); }
+inline MedianVector medianFull() { return vdupq_n_u8(255); }
+#else
+struct MedianVector {
+    unsigned char lane[medianLanes];
+};
+inline MedianVector medianLoad(const unsigned char* source) {
+    MedianVector value;
+    std::memcpy(value.lane, source, medianLanes);
+    return value;
+}
+inline void medianStore(unsigned char* target, const MedianVector& value) { std::memcpy(target, value.lane, medianLanes); }
+inline MedianVector medianMin(const MedianVector& a, const MedianVector& b) {
+    MedianVector value;
+    for (int i = 0; i < medianLanes; ++i) value.lane[i] = std::min(a.lane[i], b.lane[i]);
+    return value;
+}
+inline MedianVector medianMax(const MedianVector& a, const MedianVector& b) {
+    MedianVector value;
+    for (int i = 0; i < medianLanes; ++i) value.lane[i] = std::max(a.lane[i], b.lane[i]);
+    return value;
+}
+inline MedianVector medianFull() {
+    MedianVector value;
+    std::memset(value.lane, 255, medianLanes);
+    return value;
+}
+#endif
+
+inline void medianCompareSwap(MedianVector& a, MedianVector& b) {
+    const MedianVector low = medianMin(a, b);
+    b = medianMax(a, b);
+    a = low;
+}
+
+using CompiledMedian = void (*)(const unsigned char* const* rows, unsigned char* const* results);
+
+struct CompiledMedianEntry {
+    std::uint64_t fingerprint;
+    CompiledMedian function;
+};
+
+#ifdef MEDIAN_COMPILED_NETWORKS
+#include "median_networks_generated.inc"
+#else
+constexpr int compiledMedianBlocks = 1;
+const CompiledMedianEntry compiledMedianNetworks[] = {{0, nullptr}};
+#endif
+constexpr int compiledMedianWidth = compiledMedianBlocks * medianLanes;
+
+CompiledMedian findCompiledMedian(const MedianNetwork& network) {
+    const std::uint64_t fingerprint = network.fingerprint();
+    for (const CompiledMedianEntry& entry : compiledMedianNetworks) {
+        if (entry.function && entry.fingerprint == fingerprint) return entry.function;
+    }
+    return nullptr;
+}
+
 void executeSteps(const std::vector<MedianNetwork::Step>& steps, std::vector<Lanes>& v) {
     for (const MedianNetwork::Step& step : steps) {
-        Lanes& a = v[step.a];
-        Lanes& b = v[step.b];
-        const Lanes first = a;
-        const Lanes second = b;
-        if (step.operation == Operation::Copy) {
-            a = second;
-            continue;
-        }
-        for (int i = 0; i < medianLanes; ++i) {
-            a[i] = std::min(first[i], second[i]);
-            b[i] = std::max(first[i], second[i]);
+        unsigned char* a = v[step.a].data();
+        unsigned char* b = v[step.b].data();
+        switch (step.operation) {
+            case Operation::CompareSwap: {
+                const MedianVector first = medianLoad(a);
+                const MedianVector second = medianLoad(b);
+                medianStore(a, medianMin(first, second));
+                medianStore(b, medianMax(first, second));
+                break;
+            }
+            case Operation::Min:
+                medianStore(a, medianMin(medianLoad(a), medianLoad(b)));
+                break;
+            case Operation::Max:
+                medianStore(b, medianMax(medianLoad(a), medianLoad(b)));
+                break;
+            case Operation::Copy:
+                std::memcpy(a, b, medianLanes);
+                break;
         }
     }
 }
 
 bool isImpulse(unsigned char pixel) {
     return pixel == 0 || pixel == 255;
+}
+
+inline void medianSwitch(const unsigned char* pixels, const unsigned char* median, unsigned char* target) {
+#if defined(__ARM_NEON)
+    const uint8x16_t pixel = vld1q_u8(pixels);
+    const uint8x16_t impulse = vorrq_u8(vceqq_u8(pixel, vdupq_n_u8(0)), vceqq_u8(pixel, vdupq_n_u8(255)));
+    vst1q_u8(target, vbslq_u8(impulse, vld1q_u8(median), pixel));
+#else
+    for (int i = 0; i < medianLanes; ++i) target[i] = isImpulse(pixels[i]) ? median[i] : pixels[i];
+#endif
+}
+
+void medianCompiledStrips(const Image& image, Image& result, const MedianNetwork& network, CompiledMedian function,
+                          std::size_t firstStrip, std::size_t endStrip, bool switching) {
+    const int radius = network.radius;
+    const int rows = network.strip + 2 * radius;
+    const int lastColumn = image.width - radius;
+    std::vector<const unsigned char*> sources(static_cast<std::size_t>(rows));
+    std::vector<unsigned char*> targets(static_cast<std::size_t>(network.strip));
+    std::vector<unsigned char> medians(static_cast<std::size_t>(network.strip) * compiledMedianWidth);
+    std::array<unsigned char, compiledMedianWidth> unused{};
+    for (std::size_t strip = firstStrip; strip < endStrip; ++strip) {
+        const int y0 = radius + static_cast<int>(strip) * network.strip;
+        for (int start = radius; start < lastColumn; start += compiledMedianWidth) {
+            const int x = std::max(radius, std::min(start, lastColumn - compiledMedianWidth));
+            for (int row = 0; row < rows; ++row) {
+                const int y = std::min(y0 - radius + row, image.height - 1);
+                sources[row] = image.pixels.data() + static_cast<std::size_t>(y) * image.width + x - radius;
+            }
+            for (int j = 0; j < network.strip; ++j) {
+                if (y0 + j >= image.height - radius) targets[j] = unused.data();
+                else if (switching) targets[j] = medians.data() + static_cast<std::size_t>(j) * compiledMedianWidth;
+                else targets[j] = result.pixels.data() + static_cast<std::size_t>(y0 + j) * image.width + x;
+            }
+            function(sources.data(), targets.data());
+            if (!switching) continue;
+            for (int j = 0; j < network.strip && y0 + j < image.height - radius; ++j) {
+                const std::size_t offset = static_cast<std::size_t>(y0 + j) * image.width + x;
+                const unsigned char* pixels = image.pixels.data() + offset;
+                const unsigned char* median = medians.data() + static_cast<std::size_t>(j) * compiledMedianWidth;
+                unsigned char* target = result.pixels.data() + offset;
+                for (int i = 0; i < compiledMedianWidth; i += medianLanes) medianSwitch(pixels + i, median + i, target + i);
+            }
+        }
+    }
 }
 
 void medianNetworkStrips(const Image& image, Image& result, const MedianNetwork& network,
@@ -268,12 +387,12 @@ void medianNetworkStrips(const Image& image, Image& result, const MedianNetwork&
     const int rows = network.strip + 2 * radius;
     const int lastColumn = image.width - radius;
     std::vector<Lanes> v(static_cast<std::size_t>(network.wires));
-    for (int wire : network.constants) v[wire].fill(255);
     for (std::size_t strip = firstStrip; strip < endStrip; ++strip) {
         const int y0 = radius + static_cast<int>(strip) * network.strip;
         for (int start = radius; start < lastColumn; start += medianLanes) {
             const int x = std::max(radius, std::min(start, lastColumn - medianLanes));
             const int lanes = std::min(medianLanes, lastColumn - x);
+            for (int wire : network.constants) v[wire].fill(255);
             for (int row = 0; row < rows; ++row) {
                 const int y = std::min(y0 - radius + row, image.height - 1);
                 const unsigned char* source = image.pixels.data() + static_cast<std::size_t>(y) * image.width + x - radius;
@@ -392,6 +511,78 @@ std::string MedianNetwork::openclDefinitions() const {
     return source.str();
 }
 
+std::string MedianNetwork::cpuFunction(const std::string& name, int blocks) const {
+    std::ostringstream source;
+    auto variable = [](int block, int wire) { return "v" + std::to_string(block) + "_" + std::to_string(wire); };
+    source << "void " << name << "(const unsigned char* const* rows, unsigned char* const* results) {\n";
+    for (int block = 0; block < blocks; ++block) {
+        source << "    MedianVector";
+        for (int wire = 0; wire < wires; ++wire) source << (wire ? ", " : " ") << variable(block, wire);
+        source << ";\n";
+    }
+    std::vector<char> ready(static_cast<std::size_t>(wires), 0);
+    std::vector<char> constant(static_cast<std::size_t>(wires), 0);
+    for (int wire : constants) constant[wire] = 1;
+    auto prepare = [&](int wire) {
+        if (ready[wire]) return;
+        ready[wire] = 1;
+        for (int block = 0; block < blocks; ++block) {
+            if (wire < inputs) {
+                source << "    " << variable(block, wire) << " = medianLoad(rows[" << wire / size() << "] + "
+                       << wire % size() + 16 * block << ");\n";
+            } else if (constant[wire]) {
+                source << "    " << variable(block, wire) << " = medianFull();\n";
+            }
+        }
+    };
+    for (const Step& step : steps) {
+        prepare(step.b);
+        if (step.operation != Operation::Copy) prepare(step.a);
+        ready[step.a] = 1;
+        for (int block = 0; block < blocks; ++block) {
+            const std::string a = variable(block, step.a);
+            const std::string b = variable(block, step.b);
+            switch (step.operation) {
+                case Operation::CompareSwap: source << "    medianCompareSwap(" << a << ", " << b << ");\n"; break;
+                case Operation::Min: source << "    " << a << " = medianMin(" << a << ", " << b << ");\n"; break;
+                case Operation::Max: source << "    " << b << " = medianMax(" << a << ", " << b << ");\n"; break;
+                case Operation::Copy: source << "    " << a << " = " << b << ";\n"; break;
+            }
+        }
+    }
+    for (std::size_t j = 0; j < outputs.size(); ++j) {
+        prepare(outputs[j]);
+        for (int block = 0; block < blocks; ++block) {
+            source << "    medianStore(results[" << j << "] + " << 16 * block << ", " << variable(block, outputs[j]) << ");\n";
+        }
+    }
+    source << "}\n";
+    return source.str();
+}
+
+std::uint64_t MedianNetwork::fingerprint() const {
+    std::uint64_t value = 1469598103934665603ull;
+    auto add = [&](long long number) {
+        value ^= static_cast<std::uint64_t>(number);
+        value *= 1099511628211ull;
+    };
+    add(radius);
+    add(strip);
+    add(inputs);
+    add(wires);
+    add(static_cast<long long>(constants.size()));
+    for (int wire : constants) add(wire);
+    add(static_cast<long long>(steps.size()));
+    for (const Step& step : steps) {
+        add(static_cast<int>(step.operation));
+        add(step.a);
+        add(step.b);
+    }
+    add(static_cast<long long>(outputs.size()));
+    for (int wire : outputs) add(wire);
+    return value;
+}
+
 MedianNetwork buildMedianNetwork(MedianSort sort, int radius, int strip) {
     if (sort == MedianSort::Standard) throw std::invalid_argument("The standard median does not use a network");
     if (radius < 1) throw std::invalid_argument("Median radius must be at least 1");
@@ -432,8 +623,10 @@ void medianFilterParallel(const Image& image, Image& result, int threads, const 
     const int interiorRows = image.height - 2 * network.radius;
     if (image.width <= 2 * network.radius || interiorRows <= 0) return;
     const std::size_t strips = static_cast<std::size_t>((interiorRows + network.strip - 1) / network.strip);
+    const CompiledMedian compiled = image.width - 2 * network.radius >= compiledMedianWidth ? findCompiledMedian(network) : nullptr;
     parallelRanges(strips, threads, [&](std::size_t begin, std::size_t end, int) {
-        medianNetworkStrips(image, result, network, begin, end, switching);
+        if (compiled) medianCompiledStrips(image, result, network, compiled, begin, end, switching);
+        else medianNetworkStrips(image, result, network, begin, end, switching);
     });
 }
 
@@ -481,6 +674,6 @@ void MedianFilterGPU::run(const Image& image, Image& output, cl_event* kernelEve
     }
     // image.pixels.data() is a data address on CPU
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer"); // 0 means we dont wait for other events
-    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel"); // this function enqueues the execution of a kernel on an OpenCL device
+    enqueueTiles(cl.queue, kernel, globalWorkSize[0], globalWorkSize[1], kernelEvent); // this function enqueues the execution of a kernel on an OpenCL device
     checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
 }

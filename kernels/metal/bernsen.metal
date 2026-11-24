@@ -8,11 +8,7 @@ kernel void bernsenRowMinMax(
     constant int& width [[buffer(2)]],
     constant int& height [[buffer(3)]],
     constant int& radius [[buffer(4)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     const int x = gridPosition.x;
@@ -38,11 +34,7 @@ kernel void bernsenColumns(
     constant int& height [[buffer(4)]],
     constant int& radius [[buffer(5)]],
     constant int& minContrast [[buffer(6)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     const int x = gridPosition.x;
@@ -59,9 +51,9 @@ kernel void bernsenColumns(
     }
     const int Jmin = low;
     const int Jmax = high;
-    const int threshold = (Jmax + Jmin) / 2;
+    const int sum = Jmax + Jmin;
     const size_t index = (size_t)y * width + x;
-    output[index] = Jmax - Jmin < minContrast || input[index] < threshold ? 0 : 255;
+    output[index] = (Jmax - Jmin < minContrast ? sum < 256 : 2 * input[index] < sum) ? 0 : 255;
 }
 
 #define BERNSEN_ROW_OUTPUTS 2048
@@ -75,11 +67,9 @@ kernel void bernsenRowMinMaxLocal(
     constant int& height [[buffer(3)]],
     constant int& radius [[buffer(4)]],
     threadgroup uchar* scratch [[threadgroup(0)]],
-    uint3 gridPosition [[thread_position_in_grid]],
     uint3 localPosition [[thread_position_in_threadgroup]],
     uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 groupSize [[threads_per_threadgroup]]
 )
 {
     const int id = localPosition.x;
@@ -128,11 +118,9 @@ kernel void bernsenColumnsLocal(
     constant int& radius [[buffer(5)]],
     constant int& minContrast [[buffer(6)]],
     threadgroup uchar2* scratch [[threadgroup(0)]],
-    uint3 gridPosition [[thread_position_in_grid]],
     uint3 localPosition [[thread_position_in_threadgroup]],
     uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 groupSize [[threads_per_threadgroup]]
 )
 {
     const int column = localPosition.x;
@@ -171,9 +159,9 @@ kernel void bernsenColumnsLocal(
         const uchar2 b = values[buffer][(o + window - span) * BERNSEN_TILE_COLUMNS + column];
         const int Jmin = min(a.x, b.x);
         const int Jmax = max(a.y, b.y);
-        const int threshold = (Jmax + Jmin) / 2;
+        const int sum = Jmax + Jmin;
         const size_t index = (size_t)(y0 + o) * width + x;
-        output[index] = Jmax - Jmin < minContrast || input[index] < threshold ? 0 : 255;
+        output[index] = (Jmax - Jmin < minContrast ? sum < 256 : 2 * input[index] < sum) ? 0 : 255;
     }
 }
 
@@ -181,12 +169,28 @@ kernel void bernsenColumnsLocal(
 
 uchar localThresholdValue(long count, uint sum, uint squares, long pixel, float k, float stddevRange, bool sauvola)
 {
-    const float deviation = sqrt((float)(count * squares - (ulong)sum * sum));
+    const long hundredthsK = (long)rint(k * 100.0f);
+    const ulong variance = (ulong)count * squares - (ulong)sum * sum;
     if (sauvola) {
-        const float threshold = sum * (1.0f - k) + sum * k * deviation / (count * stddevRange);
-        return (float)(count * pixel) < threshold ? 0 : 255;
+        const int inner = 100 * (int)count * (int)pixel - (100 - (int)hundredthsK) * (int)sum;
+        const int right = (int)sum * (int)hundredthsK;
+        const float leftValue = (float)count * stddevRange * (float)inner;
+        const float leftSquared = leftValue * leftValue;
+        const float rightSquared = (float)right * (float)right * (float)variance;
+        const float difference = leftSquared - rightSquared;
+        if (inner >= 0 && fabs(difference) <= 1e-5f * (leftSquared + rightSquared)) {
+            const ulong left = (ulong)count * (ulong)stddevRange * (ulong)inner;
+            const ulong rightSquaredExact = (ulong)right * (ulong)right;
+            const ulong leftHigh = mulhi(left, left);
+            const ulong leftLow = left * left;
+            const ulong rightHigh = mulhi(rightSquaredExact, variance);
+            const ulong rightLow = rightSquaredExact * variance;
+            return leftHigh < rightHigh || (leftHigh == rightHigh && leftLow < rightLow) ? 0 : 255;
+        }
+        return inner < 0 || difference < 0.0f ? 0 : 255;
     }
-    return (float)((long)sum - count * pixel) > k * deviation ? 0 : 255;
+    const long difference = 100 * ((long)sum - count * pixel);
+    return difference > 0 && (ulong)difference * (ulong)difference > (ulong)(hundredthsK * hundredthsK) * variance ? 0 : 255;
 }
 
 void localThresholdBand(device const uchar* input, device uchar* output, int width, int height, int radius,
@@ -300,11 +304,9 @@ kernel void niblack(
     threadgroup uint* localSquares [[threadgroup(1)]],
     threadgroup uint* blockSum [[threadgroup(2)]],
     threadgroup uint* blockSquares [[threadgroup(3)]],
-    uint3 gridPosition [[thread_position_in_grid]],
     uint3 localPosition [[thread_position_in_threadgroup]],
     uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 groupSize [[threads_per_threadgroup]]
 )
 {
     localThresholdBand(input, output, width, height, radius, k, stddevRange, bandHeight, localSum, localSquares,
@@ -324,11 +326,9 @@ kernel void sauvola(
     threadgroup uint* localSquares [[threadgroup(1)]],
     threadgroup uint* blockSum [[threadgroup(2)]],
     threadgroup uint* blockSquares [[threadgroup(3)]],
-    uint3 gridPosition [[thread_position_in_grid]],
     uint3 localPosition [[thread_position_in_threadgroup]],
     uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 groupSize [[threads_per_threadgroup]]
 )
 {
     localThresholdBand(input, output, width, height, radius, k, stddevRange, bandHeight, localSum, localSquares,

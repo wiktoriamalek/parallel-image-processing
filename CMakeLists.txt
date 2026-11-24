@@ -27,10 +27,25 @@ add_library(image_processing
         src/contrast.cpp
         src/peaks_valleys_detection.cpp
         src/canny.cpp
+        src/gabor.cpp
 )
 
 target_include_directories(image_processing PUBLIC include)
 target_link_libraries(image_processing PUBLIC OpenCL::OpenCL Threads::Threads)
+
+add_executable(median_network_codegen src/median_network_codegen.cpp src/median_filter.cpp src/opencl_utils.cpp)
+target_include_directories(median_network_codegen PRIVATE include)
+target_link_libraries(median_network_codegen PRIVATE OpenCL::OpenCL Threads::Threads)
+set(MEDIAN_NETWORKS_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(MEDIAN_NETWORKS_FILE "${MEDIAN_NETWORKS_DIRECTORY}/median_networks_generated.inc")
+add_custom_command(OUTPUT "${MEDIAN_NETWORKS_FILE}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${MEDIAN_NETWORKS_DIRECTORY}"
+        COMMAND median_network_codegen "${MEDIAN_NETWORKS_FILE}"
+        DEPENDS median_network_codegen)
+add_custom_target(median_networks DEPENDS "${MEDIAN_NETWORKS_FILE}")
+add_dependencies(image_processing median_networks)
+target_include_directories(image_processing PRIVATE "${MEDIAN_NETWORKS_DIRECTORY}")
+target_compile_definitions(image_processing PRIVATE MEDIAN_COMPILED_NETWORKS)
 if(APPLE)
     enable_language(OBJCXX)
 
@@ -54,7 +69,7 @@ if(APPLE)
         set(kernel_air "${CMAKE_CURRENT_BINARY_DIR}/metal/${kernel_name}.air")
         add_custom_command(OUTPUT "${kernel_air}"
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/metal"
-                COMMAND ${XCRUN_EXECUTABLE} -sdk macosx metal -std=metal3.0 -O2 -fno-fast-math -ffp-contract=off
+                COMMAND ${XCRUN_EXECUTABLE} -sdk macosx metal -std=metal3.0 -O2 -fno-fast-math -ffp-contract=on
                         -c "${kernel_source}" -o "${kernel_air}"
                 DEPENDS "${kernel_source}"
                 VERBATIM
@@ -99,20 +114,83 @@ add_executable(peaks_valleys_detection_test tests/peaks_valleys_detection_test.c
 add_executable(niblack_sauvola_test tests/niblack_sauvola_test.cpp)
 add_executable(core_scheduling_test tests/core_scheduling_test.cpp)
 add_executable(canny_test tests/canny_test.cpp)
+add_executable(cpu_vectorization_test tests/cpu_vectorization_test.cpp)
+add_executable(gabor_test tests/gabor_test.cpp)
 
-foreach(target img_proc check_opencl thresholding_time_comparison identity_convolution_test otsu_test distortion_test bernsen_test median_filter_test region_growing_test multi_otsu_test negative_test contrast_test brown_conrady_test peaks_valleys_detection_test niblack_sauvola_test core_scheduling_test canny_test)
+foreach(target img_proc check_opencl thresholding_time_comparison identity_convolution_test otsu_test distortion_test bernsen_test median_filter_test region_growing_test multi_otsu_test negative_test contrast_test brown_conrady_test peaks_valleys_detection_test niblack_sauvola_test core_scheduling_test canny_test cpu_vectorization_test gabor_test)
     target_link_libraries(${target} PRIVATE image_processing)
 endforeach()
 
 if(APPLE)
     list(APPEND CMAKE_PREFIX_PATH /opt/homebrew/opt/qt)
+    add_executable(metal_test tests/metal_test.cpp)
+    target_link_libraries(metal_test PRIVATE image_processing)
     add_executable(check_metal tests/check_metal.cpp)
     target_link_libraries(check_metal PRIVATE image_processing)
+
+    set(METAL_COMPARISON_SOURCES tests/opencl_metal_overhead.mm tests/opencl_metal_workgroups.mm tests/metal_fp_contract.mm
+            tests/metal_median_options.mm tests/mps_comparison.mm)
+    set_source_files_properties(${METAL_COMPARISON_SOURCES} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    foreach(source IN LISTS METAL_COMPARISON_SOURCES)
+        get_filename_component(target "${source}" NAME_WE)
+        add_executable(${target} ${source})
+        target_link_libraries(${target} PRIVATE image_processing)
+    endforeach()
+    find_library(MPS_FRAMEWORK MetalPerformanceShaders REQUIRED)
+    target_link_libraries(mps_comparison PRIVATE ${MPS_FRAMEWORK})
+    target_compile_definitions(opencl_metal_workgroups PRIVATE METAL_LIBRARY_PATH="${METAL_LIBRARY}")
+    add_dependencies(opencl_metal_workgroups metal_kernels)
+
+    set(METAL_VARIANT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/metal_variants")
+    set(METAL_VARIANT_LIBRARIES)
+    function(add_metal_variant name)
+        cmake_parse_arguments(VARIANT "" "" "SOURCES;FLAGS" ${ARGN})
+        set(air_files)
+        foreach(kernel_source IN LISTS VARIANT_SOURCES)
+            get_filename_component(kernel_name "${kernel_source}" NAME_WE)
+            set(kernel_air "${METAL_VARIANT_DIRECTORY}/${name}_${kernel_name}.air")
+            add_custom_command(OUTPUT "${kernel_air}"
+                    COMMAND ${CMAKE_COMMAND} -E make_directory "${METAL_VARIANT_DIRECTORY}"
+                    COMMAND ${XCRUN_EXECUTABLE} -sdk macosx metal ${VARIANT_FLAGS} -c "${CMAKE_CURRENT_SOURCE_DIR}/${kernel_source}" -o "${kernel_air}"
+                    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${kernel_source}"
+                    VERBATIM
+            )
+            list(APPEND air_files "${kernel_air}")
+        endforeach()
+        set(library "${METAL_VARIANT_DIRECTORY}/${name}.metallib")
+        add_custom_command(OUTPUT "${library}"
+                COMMAND ${XCRUN_EXECUTABLE} -sdk macosx metallib ${air_files} -o "${library}"
+                DEPENDS ${air_files}
+                VERBATIM
+        )
+        set(METAL_VARIANT_LIBRARIES ${METAL_VARIANT_LIBRARIES} "${library}" PARENT_SCOPE)
+    endfunction()
+    set(FP_SOURCES kernels/metal/distortion_correction.metal kernels/metal/convolution.metal)
+    add_metal_variant(fp_off SOURCES ${FP_SOURCES} FLAGS -std=metal3.0 -O2 -fno-fast-math -ffp-contract=off)
+    add_metal_variant(fp_on SOURCES ${FP_SOURCES} FLAGS -std=metal3.0 -O2 -fno-fast-math -ffp-contract=on)
+    add_metal_variant(fp_fast SOURCES ${FP_SOURCES} FLAGS -std=metal3.0 -O2 -fno-fast-math -ffp-contract=fast)
+    add_metal_variant(fp_fastmath SOURCES ${FP_SOURCES} FLAGS -std=metal3.0 -O2)
+    add_metal_variant(median_project SOURCES kernels/metal/median_filter.metal FLAGS -std=metal3.0 -O2 -fno-fast-math -ffp-contract=on -DMEDIAN_RADIUS=1)
+    add_metal_variant(median_default SOURCES kernels/metal/median_filter.metal FLAGS -O2 -DMEDIAN_RADIUS=1)
+    add_metal_variant(median_size SOURCES kernels/metal/median_filter.metal FLAGS -std=metal3.0 -Os -DMEDIAN_RADIUS=1)
+    add_custom_target(metal_variants DEPENDS ${METAL_VARIANT_LIBRARIES})
+    foreach(target metal_fp_contract metal_median_options)
+        add_dependencies(${target} metal_variants)
+        target_compile_definitions(${target} PRIVATE METAL_VARIANT_DIRECTORY="${METAL_VARIANT_DIRECTORY}")
+    endforeach()
 endif()
 find_package(Qt6 COMPONENTS Widgets Concurrent QUIET)
 add_library(algorithm_benchmarking gui/algorithms.cpp)
 target_include_directories(algorithm_benchmarking PUBLIC gui)
 target_link_libraries(algorithm_benchmarking PUBLIC image_processing)
+
+if(APPLE)
+    add_executable(metal_comparison tests/metal_comparison.cpp)
+    target_link_libraries(metal_comparison PRIVATE algorithm_benchmarking)
+    target_compile_definitions(metal_comparison PRIVATE IMAGE_BUILD_TYPE="$<CONFIG>")
+    add_executable(opencv_comparison tests/opencv_comparison.cpp)
+    target_link_libraries(opencv_comparison PRIVATE algorithm_benchmarking)
+endif()
 
 if(Qt6_FOUND)
     add_executable(img_gui
@@ -121,6 +199,8 @@ if(Qt6_FOUND)
             gui/main_window.hpp
             gui/image_view.cpp
             gui/image_view.hpp
+            gui/theme.cpp
+            gui/theme.hpp
             gui/algorithms.hpp
     )
     set_target_properties(img_gui PROPERTIES AUTOMOC ON)

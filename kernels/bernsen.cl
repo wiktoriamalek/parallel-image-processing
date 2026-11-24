@@ -32,9 +32,9 @@ __kernel void bernsenColumns(__global const uchar* input, __global const uchar2*
     }
     const int Jmin = low;
     const int Jmax = high;
-    const int threshold = (Jmax + Jmin) / 2;
+    const int sum = Jmax + Jmin;
     const size_t index = (size_t)y * width + x;
-    output[index] = Jmax - Jmin < minContrast || input[index] < threshold ? 0 : 255;
+    output[index] = (Jmax - Jmin < minContrast ? sum < 256 : 2 * input[index] < sum) ? 0 : 255;
 }
 
 #define BERNSEN_ROW_OUTPUTS 2048
@@ -120,9 +120,9 @@ __kernel void bernsenColumnsLocal(__global const uchar* input, __global const uc
         const uchar2 b = values[buffer][(o + window - span) * BERNSEN_TILE_COLUMNS + column];
         const int Jmin = min(a.x, b.x);
         const int Jmax = max(a.y, b.y);
-        const int threshold = (Jmax + Jmin) / 2;
+        const int sum = Jmax + Jmin;
         const size_t index = (size_t)(y0 + o) * width + x;
-        output[index] = Jmax - Jmin < minContrast || input[index] < threshold ? 0 : 255;
+        output[index] = (Jmax - Jmin < minContrast ? sum < 256 : 2 * input[index] < sum) ? 0 : 255;
     }
 }
 
@@ -130,12 +130,28 @@ __kernel void bernsenColumnsLocal(__global const uchar* input, __global const uc
 
 uchar localThresholdValue(long count, uint sum, uint squares, long pixel, float k, float stddevRange, bool sauvola)
 {
-    const float deviation = sqrt((float)(count * squares - (ulong)sum * sum));
+    const long hundredthsK = (long)rint(k * 100.0f);
+    const ulong variance = (ulong)count * squares - (ulong)sum * sum;
     if (sauvola) {
-        const float threshold = sum * (1.0f - k) + sum * k * deviation / (count * stddevRange);
-        return (float)(count * pixel) < threshold ? 0 : 255;
+        const int inner = 100 * (int)count * (int)pixel - (100 - (int)hundredthsK) * (int)sum;
+        const int right = (int)sum * (int)hundredthsK;
+        const float leftValue = (float)count * stddevRange * (float)inner;
+        const float leftSquared = leftValue * leftValue;
+        const float rightSquared = (float)right * (float)right * (float)variance;
+        const float difference = leftSquared - rightSquared;
+        if (inner >= 0 && fabs(difference) <= 1e-5f * (leftSquared + rightSquared)) {
+            const ulong left = (ulong)count * (ulong)stddevRange * (ulong)inner;
+            const ulong rightSquaredExact = (ulong)right * (ulong)right;
+            const ulong leftHigh = mul_hi(left, left);
+            const ulong leftLow = left * left;
+            const ulong rightHigh = mul_hi(rightSquaredExact, variance);
+            const ulong rightLow = rightSquaredExact * variance;
+            return leftHigh < rightHigh || (leftHigh == rightHigh && leftLow < rightLow) ? 0 : 255;
+        }
+        return inner < 0 || difference < 0.0f ? 0 : 255;
     }
-    return (float)((long)sum - count * pixel) > k * deviation ? 0 : 255;
+    const long difference = 100 * ((long)sum - count * pixel);
+    return difference > 0 && (ulong)difference * (ulong)difference > (ulong)(hundredthsK * hundredthsK) * variance ? 0 : 255;
 }
 
 void localThresholdBand(__global const uchar* input, __global uchar* output, int width, int height, int radius,

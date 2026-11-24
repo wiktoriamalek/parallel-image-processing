@@ -1,0 +1,9 @@
+api,compilation,distortion_different_pixels,box_blur_different_pixels,distortion_kernel_us,box_blur_kernel_us
+OpenCL,"default",0,0,265.438,173.521
+OpenCL,"-cl-mad-enable",0,0,654.438,256.833
+OpenCL,"-cl-fp32-correctly-rounded-divide-sqrt",0,0,396.542,119.021
+OpenCL,"-cl-fast-relaxed-math",385,0,172.792,123.208
+Metal,"-fno-fast-math -ffp-contract=off",37,53789,183.833,127.875
+Metal,"-fno-fast-math -ffp-contract=on",0,0,179.250,123.583
+Metal,"-fno-fast-math -ffp-contract=fast",0,0,179.375,126.146
+Metal,"default (fast math)",385,0,119.833,126.125

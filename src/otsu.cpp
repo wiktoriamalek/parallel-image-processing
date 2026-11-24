@@ -9,8 +9,9 @@
 #include <vector>
 
 void calculateHistogramRange(const Image& image, Histogram& histogram, std::size_t begin, std::size_t end) {
+    const unsigned char* pixels = image.pixels.data();
     for (std::size_t i=begin; i<end; i++) {
-        int pixel = image.pixels[i];
+        int pixel = pixels[i];
         ++histogram[pixel]; // if pixel is e.g 50, we increase histogram[50]
     }
 }
@@ -74,14 +75,15 @@ int calculateOtsuThreshold(const Histogram& histogram) {
 }
                         // not const, because we will be modifying it
 void applyThresholdRange(Image& image, int threshold, std::size_t begin, std::size_t end) {
+    unsigned char* pixels = image.pixels.data();
     for (std::size_t i=begin; i<end; i++) {
-        if (image.pixels[i] <= threshold)
+        if (pixels[i] <= threshold)
         {
-            image.pixels[i] = 0;
+            pixels[i] = 0;
         }
         else
         {
-            image.pixels[i] = 255;
+            pixels[i] = 255;
         }
     }
 }
@@ -173,7 +175,8 @@ Image multiOtsuSegmentation(const Image& image, int classes, int threads) {
     const auto lookup = multiOtsuLookupTable(calculateMultiOtsuThresholds(calculateHistogram(image, threads), classes));
     Image segmented = image;
     parallelRanges(segmented.pixels.size(), threads, [&](std::size_t begin, std::size_t end, int) {
-        for (std::size_t i = begin; i < end; ++i) segmented.pixels[i] = lookup[segmented.pixels[i]];
+        unsigned char* pixels = segmented.pixels.data();
+        for (std::size_t i = begin; i < end; ++i) pixels[i] = lookup[pixels[i]];
     });
     return segmented;
 }
@@ -251,10 +254,10 @@ void OtsuGPU::compute(cl_event* histogramEvent, cl_event* otsuThresholdEvent, cl
     const size_t localSize = 256;
     const size_t globalSize = 256*localSize; // 256 work-groups, so every GPU core gets several of them, with only 2 groups most cores stay idle
     // the histogram is zeroed on the GPU, so not even the 256 counters are copied from the CPU
-    checkCL(clEnqueueNDRangeKernel(cl.queue, clearHistogramKernel, 1, nullptr, &localSize, nullptr, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, clearHistogramKernel, 1, nullptr, &localSize, &localSize, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");
     checkCL(clEnqueueNDRangeKernel(cl.queue, histogramKernel, 1, nullptr, &globalSize, &localSize, 0, nullptr, histogramEvent), "clEnqueueNDRangeKernel");
     checkCL(clEnqueueNDRangeKernel(cl.queue, otsuThresholdKernel, 1, nullptr, &localSize, &localSize, 0, nullptr, otsuThresholdEvent), "clEnqueueNDRangeKernel");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, thresholdKernel, 1, nullptr, &pixelCount, nullptr, 0, nullptr, thresholdEvent), "clEnqueueNDRangeKernel");
+    enqueueLine(cl.queue, thresholdKernel, pixelCount, thresholdEvent);
 }
 
 void OtsuGPU::finish() {
@@ -421,7 +424,7 @@ void MultiOtsuGPU::compute(cl_event* histogramEvent, std::vector<cl_event>* thre
         thresholdsEvents->push_back(nullptr);
         return &thresholdsEvents->back();
     };
-    checkCL(clEnqueueNDRangeKernel(cl.queue, clearHistogramKernel, 1, nullptr, &localSize, nullptr, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");
+    checkCL(clEnqueueNDRangeKernel(cl.queue, clearHistogramKernel, 1, nullptr, &localSize, &localSize, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");
     checkCL(clEnqueueNDRangeKernel(cl.queue, histogramKernel, 1, nullptr, &globalSize, &localSize, 0, nullptr, histogramEvent), "clEnqueueNDRangeKernel");
     checkCL(clEnqueueNDRangeKernel(cl.queue, prefixKernel, 1, nullptr, &localSize, &localSize, 0, nullptr, nextEvent()), "clEnqueueNDRangeKernel");
     for (int k = 2; k <= classes; ++k) {
@@ -432,7 +435,7 @@ void MultiOtsuGPU::compute(cl_event* histogramEvent, std::vector<cl_event>* thre
         checkCL(clEnqueueNDRangeKernel(cl.queue, layerKernel, 1, nullptr, &layerSize, &localSize, 0, nullptr, nextEvent()), "clEnqueueNDRangeKernel");
     }
     checkCL(clEnqueueNDRangeKernel(cl.queue, lookupTableKernel, 1, nullptr, &localSize, &localSize, 0, nullptr, nextEvent()), "clEnqueueNDRangeKernel");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, lookupKernel, 1, nullptr, &pixelCount, nullptr, 0, nullptr, lookupEvent), "clEnqueueNDRangeKernel");
+    enqueueLine(cl.queue, lookupKernel, pixelCount, lookupEvent);
 }
 
 void MultiOtsuGPU::finish() {

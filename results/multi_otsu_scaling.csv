@@ -1,3 +1,3 @@
 image,width,height,classes,thresholds,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,threshold_search_us,gpu_thresholds,gpu_different_pixels,gpu_kernel_us,gpu_total_us,gpu_no_copy_us,gpu_zero_copy_us
-"images/cms_resolution_change/cms_2048.png",2048,2048,3,"69 137",11,100,3845.7495,1027.7085,62.021,4.667,"69 137",0,289.895833333,828.7705,489.5625,498.521
-"images/cms_resolution_change/cms_8192.png",8192,8192,3,"69 137",11,100,89981.167,16888.2915,64.2085,4.667,"69 137",0,4534.8125,8057.229,4755.1665,4831.417
+"images/cms_resolution_change/cms_2048.png",2048,2048,3,"69 137",11,100,3406.4165,924.312,61.2085,4.792,"69 137",0,128.791666667,586.2085,283.2915,359.1455
+"images/cms_resolution_change/cms_8192.png",8192,8192,3,"69 137",11,100,84933.3125,15067.6875,69.813,4.8335,"69 137",0,2089.33333333,5398.646,2397.5625,2612.1875

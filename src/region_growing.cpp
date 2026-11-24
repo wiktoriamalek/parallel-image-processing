@@ -289,7 +289,9 @@ void RegionGrowingGPU::run(const Image& image, Image& output, double* kernelUs) 
     }
 
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-    launch(initKernel, 2, globalWorkSize, nullptr, kernelUs);
+    const std::size_t pixelGlobal[2] = {roundUp(globalWorkSize[0], tileGroupSize), roundUp(globalWorkSize[1], tileGroupSize)};
+    const std::size_t pixelLocal[2] = {tileGroupSize, tileGroupSize};
+    launch(initKernel, 2, pixelGlobal, pixelLocal, kernelUs);
     checkCL(clFinish(cl.queue), "clFinish");
 
     if (localTiles) runTiles(kernelUs);
@@ -299,6 +301,8 @@ void RegionGrowingGPU::run(const Image& image, Image& output, double* kernelUs) 
 }
 
 void RegionGrowingGPU::runPixelSteps(double* kernelUs) {
+    const std::size_t pixelGlobal[2] = {roundUp(globalWorkSize[0], tileGroupSize), roundUp(globalWorkSize[1], tileGroupSize)};
+    const std::size_t pixelLocal[2] = {tileGroupSize, tileGroupSize};
     cl_mem previousMask = maskBufferA;
     cl_mem nextMask = maskBufferB;
     cl_int changed = 1;
@@ -310,7 +314,7 @@ void RegionGrowingGPU::runPixelSteps(double* kernelUs) {
         checkCL(clEnqueueWriteBuffer(cl.queue, changedBuffer, CL_TRUE, 0, sizeof(cl_int), &changed, 0, nullptr, nullptr), "clEnqueueWriteBuffer");
         checkCL(clSetKernelArg(stepKernel, 1, sizeof(cl_mem), &previousMask), "clSetKernelArg");
         checkCL(clSetKernelArg(stepKernel, 2, sizeof(cl_mem), &nextMask), "clSetKernelArg");
-        launch(stepKernel, 2, globalWorkSize, nullptr, kernelUs);
+        launch(stepKernel, 2, pixelGlobal, pixelLocal, kernelUs);
         checkCL(clEnqueueReadBuffer(cl.queue, changedBuffer, CL_TRUE, 0, sizeof(cl_int), &changed, 0, nullptr, nullptr), "clEnqueueReadBuffer");
         addKernelTimes(kernelUs);
         std::swap(previousMask, nextMask);
@@ -320,7 +324,9 @@ void RegionGrowingGPU::runPixelSteps(double* kernelUs) {
 }
 
 void RegionGrowingGPU::runTiles(double* kernelUs) {
-    launch(activeInitKernel, 1, &tileCount, nullptr, kernelUs);
+    const std::size_t activeGlobal = roundUp(tileCount, lineGroupSize);
+    const std::size_t activeLocal = lineGroupSize;
+    launch(activeInitKernel, 1, &activeGlobal, &activeLocal, kernelUs);
     cl_mem previousActive = activeBufferA;
     cl_mem nextActive = activeBufferB;
     cl_int changed = 1;

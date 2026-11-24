@@ -1,5 +1,7 @@
 #include "metal_algorithms.hpp"
+#include "bernsen.hpp"
 #include "convolution.hpp"
+#include "gabor.hpp"
 #include "median_filter.hpp"
 
 #import <Foundation/Foundation.h>
@@ -38,6 +40,7 @@ struct Pass {
     MTLSize group;
     std::vector<NSUInteger> scratch;
     bool profile = true;
+    bool joinPrevious = false;
 };
 
 std::size_t divideUp(std::size_t size, std::size_t divisor) {
@@ -65,6 +68,7 @@ struct MetalProcessor::Impl {
     int tilesY;
     int iterationCount = 0;
     double kernelUs = 0.0;
+    NSUInteger pendingSamples = 0;
     std::vector<int> thresholdValues;
     id<MTLDevice> device;
     id<MTLCommandQueue> queue;
@@ -98,8 +102,8 @@ struct MetalProcessor::Impl {
         if (!library) throw std::runtime_error("Could not load the Metal library: " + metalError(error));
         configureProfiling();
         if (algorithm == Algorithm::Resize) {
-            const double scaledWidth = static_cast<double>(width) * parameters.scale;
-            const double scaledHeight = static_cast<double>(height) * parameters.scale;
+            const double scaledWidth = static_cast<double>(width * parameters.scale);
+            const double scaledHeight = static_cast<double>(height * parameters.scale);
             if (!std::isfinite(parameters.scale) || parameters.scale <= 0 ||
                 scaledWidth > std::numeric_limits<int>::max() || scaledHeight > std::numeric_limits<int>::max()) {
                 throw std::invalid_argument("Invalid resize scale");
@@ -169,8 +173,8 @@ struct MetalProcessor::Impl {
         }
         id<MTLBuffer> lookup = buffer(256);
         if (algorithm == Algorithm::PeaksValleys) {
-            if (parameters.maxClasses < 1 || parameters.maxClasses > 256) {
-                throw std::invalid_argument("Peaks/valleys needs between 1 and 256 maximum classes");
+            if (parameters.maxClasses < 2 || parameters.maxClasses > 256) {
+                throw std::invalid_argument("Peaks/valleys needs between 2 and 256 maximum classes");
             }
             result = buffer(258 * sizeof(int));
             passes.push_back(pass("peaksValleysThresholdsKernel", {histogram, parameters.maxClasses, result, lookup}, bins, bins));
@@ -188,6 +192,7 @@ struct MetalProcessor::Impl {
                 const int firstEnd = k == parameters.classes ? 256 : k;
                 passes.push_back(pass("multiOtsuLayerKernel", {count, sum, layers, split, k, firstEnd},
                                       MTLSizeMake((257 - firstEnd) * 256, 1, 1), bins));
+                passes.back().joinPrevious = k > 2;
             }
             passes.push_back(pass("multiOtsuLookupTableKernel", {layers, split, parameters.classes, result, lookup}, bins, bins));
         }
@@ -246,9 +251,10 @@ struct MetalProcessor::Impl {
     }
 
     void configureLocalThreshold() {
-        if (parameters.radius < 0 || parameters.radius > 127 || !std::isfinite(parameters.localThresholdK)) {
-            throw std::invalid_argument("GPU local threshold supports radii 0-127 and a finite k");
+        if (parameters.radius < 0 || parameters.radius > 127) {
+            throw std::invalid_argument("GPU local threshold supports radii 0-127");
         }
+        const float factor = static_cast<float>(localThresholdHundredths(parameters.localThresholdK)) / 100.0f;
         int band = 16;
         while (band < parameters.radius && band < 64) band *= 2;
         const NSUInteger localBytes = (2048 + 2 * parameters.radius) * sizeof(std::uint32_t);
@@ -257,7 +263,7 @@ struct MetalProcessor::Impl {
             throw std::runtime_error("Insufficient Metal threadgroup memory for local thresholding");
         }
         passes.push_back(pass(algorithm == Algorithm::Niblack ? "niblack" : "sauvola",
-                              {input, output, width, height, parameters.radius, static_cast<float>(parameters.localThresholdK), 128.0f, band},
+                              {input, output, width, height, parameters.radius, factor, 128.0f, band},
                               MTLSizeMake(divideUp(width, 2048) * 256, divideUp(height, band), 1), MTLSizeMake(256, 1, 1)));
         passes.back().scratch = {localBytes, localBytes, blockBytes, blockBytes};
     }
@@ -302,20 +308,36 @@ struct MetalProcessor::Impl {
         finalPasses.push_back(pass("canny_finish", {state, output, width, height}, grid));
     }
 
+    void configureGabor() {
+        const GaborBank bank = gaborBank(parameters.gaborSigma, parameters.gaborWavelength, parameters.gaborGamma,
+                                         parameters.gaborOrientations);
+        const std::size_t tileBytes = gaborTileBytes(bank.radius);
+        if (tileBytes > [device maxThreadgroupMemoryLength]) {
+            throw std::runtime_error("Insufficient Metal threadgroup memory for the Gabor window");
+        }
+        id<MTLBuffer> weights = buffer(bank.weights.size() * sizeof(float));
+        std::memcpy([weights contents], bank.weights.data(), bank.weights.size() * sizeof(float));
+        passes.push_back(pass("gabor", {input, output, width, height, weights, bank.radius, bank.orientations},
+                              MTLSizeMake(divideUp(divideUp(width, gaborPixelsPerItem), gaborGroupSize) * gaborGroupSize,
+                                          divideUp(height, gaborGroupSize) * gaborGroupSize, 1),
+                              MTLSizeMake(gaborGroupSize, gaborGroupSize, 1)));
+        passes.back().scratch = {tileBytes};
+    }
+
     void configure() {
         const MTLSize grid = MTLSizeMake(width, height, 1);
         const MTLSize line = MTLSizeMake(pixelCount, 1, 1);
         const MTLSize lineGroup = MTLSizeMake(256, 1, 1);
         switch (algorithm) {
             case Algorithm::Threshold:
-                passes.push_back(pass("threshold_kernel", {output, parameters.threshold}, line, lineGroup));
+                passes.push_back(pass("threshold_kernel", {output, parameters.threshold, pixelCount}, line, lineGroup));
                 break;
             case Algorithm::Negative:
-                passes.push_back(pass("negative_gpu", {input, output}, line, lineGroup));
+                passes.push_back(pass("negative_gpu", {input, output, pixelCount}, line, lineGroup));
                 break;
             case Algorithm::Contrast:
                 if (!std::isfinite(parameters.contrastFactor)) throw std::invalid_argument("Contrast factor must be finite");
-                passes.push_back(pass("contrast_gpu", {input, output, parameters.contrastFactor}, line, lineGroup));
+                passes.push_back(pass("contrast_gpu", {input, output, parameters.contrastFactor, pixelCount}, line, lineGroup));
                 break;
             case Algorithm::Otsu:
             case Algorithm::MultiOtsu:
@@ -340,6 +362,10 @@ struct MetalProcessor::Impl {
                 configureMedian();
                 break;
             case Algorithm::Distortion:
+                if (!std::isfinite(parameters.k1) || !std::isfinite(parameters.k2) || !std::isfinite(parameters.k3) ||
+                    !std::isfinite(parameters.p1) || !std::isfinite(parameters.p2)) {
+                    throw std::invalid_argument("Distortion coefficients must be finite");
+                }
                 if (parameters.distortionModel == 1) {
                     passes.push_back(pass("brown_conrady_correction", {input, output, width, height, parameters.k1,
                                           parameters.k2, parameters.k3, parameters.p1, parameters.p2}, grid));
@@ -362,97 +388,125 @@ struct MetalProcessor::Impl {
             case Algorithm::Canny:
                 configureCanny();
                 break;
+            case Algorithm::Gabor:
+                configureGabor();
+                break;
             default:
                 throw std::invalid_argument("Unknown Metal algorithm");
         }
     }
 
     void submit(const std::vector<Pass>& work) {
-        if (work.empty()) return;
-        if (work.size() * 2 > 1024) throw std::runtime_error("Too many Metal profiling samples in one batch");
-        id<MTLCommandBuffer> command = [queue commandBuffer];
-        if (!command) throw std::runtime_error("Could not create a Metal command buffer");
-        NSUInteger sampleIndex = 0;
-        for (const Pass& item : work) {
-            MTLComputePassDescriptor* descriptor = [MTLComputePassDescriptor computePassDescriptor];
-            if (samples && item.profile) {
-                auto* attachment = descriptor.sampleBufferAttachments[0];
-                attachment.sampleBuffer = samples;
-                attachment.startOfEncoderSampleIndex = sampleIndex++;
-                attachment.endOfEncoderSampleIndex = sampleIndex++;
-            }
-            id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoderWithDescriptor:descriptor];
-            if (!encoder) throw std::runtime_error("Could not create a Metal compute encoder");
-            [encoder setComputePipelineState:item.pipeline];
-            for (NSUInteger i = 0; i < item.arguments.size(); ++i) {
-                const Argument& argument = item.arguments[i];
-                if (argument.buffer) [encoder setBuffer:argument.buffer offset:0 atIndex:i];
-                else [encoder setBytes:argument.bytes.data() length:argument.bytes.size() atIndex:i];
-            }
-            for (NSUInteger i = 0; i < item.scratch.size(); ++i) {
-                [encoder setThreadgroupMemoryLength:((item.scratch[i] + 15) / 16) * 16 atIndex:i];
-            }
-            [encoder dispatchThreads:item.grid threadsPerThreadgroup:item.group];
-            [encoder endEncoding];
-        }
-        [command commit];
-        [command waitUntilCompleted];
-        if ([command status] == MTLCommandBufferStatusError) {
-            throw std::runtime_error("Metal execution failed: " + metalError([command error]));
-        }
-        if (samples && sampleIndex > 0) {
-            NSData* resolved = [samples resolveCounterRange:NSMakeRange(0, sampleIndex)];
-            if (!resolved || [resolved length] != sampleIndex * sizeof(MTLCounterResultTimestamp)) {
-                throw std::runtime_error("Could not resolve Metal GPU timestamps");
-            }
-            const auto* timestamps = static_cast<const MTLCounterResultTimestamp*>([resolved bytes]);
-            for (NSUInteger i = 0; i < sampleIndex; i += 2) {
-                const std::uint64_t start = timestamps[i].timestamp;
-                const std::uint64_t end = timestamps[i + 1].timestamp;
-                if (start == MTLCounterErrorValue || end == MTLCounterErrorValue || end < start) {
-                    throw std::runtime_error("Invalid Metal GPU timestamp");
+        @autoreleasepool {
+            if (work.empty()) return;
+            if (work.size() * 2 > 1024) throw std::runtime_error("Too many Metal profiling samples in one batch");
+            id<MTLCommandBuffer> command = [queue commandBuffer];
+            if (!command) throw std::runtime_error("Could not create a Metal command buffer");
+            NSUInteger sampleIndex = 0;
+            id<MTLComputeCommandEncoder> encoder = nil;
+            for (const Pass& item : work) {
+                if (!encoder || !item.joinPrevious) {
+                    if (encoder) [encoder endEncoding];
+                    MTLComputePassDescriptor* descriptor = [MTLComputePassDescriptor computePassDescriptor];
+                    if (samples && item.profile) {
+                        auto* attachment = descriptor.sampleBufferAttachments[0];
+                        attachment.sampleBuffer = samples;
+                        attachment.startOfEncoderSampleIndex = sampleIndex++;
+                        attachment.endOfEncoderSampleIndex = sampleIndex++;
+                    }
+                    encoder = [command computeCommandEncoderWithDescriptor:descriptor];
+                    if (!encoder) throw std::runtime_error("Could not create a Metal compute encoder");
                 }
-                kernelUs += static_cast<double>(end - start) / 1000.0;
+                [encoder setComputePipelineState:item.pipeline];
+                for (NSUInteger i = 0; i < item.arguments.size(); ++i) {
+                    const Argument& argument = item.arguments[i];
+                    if (argument.buffer) [encoder setBuffer:argument.buffer offset:0 atIndex:i];
+                    else [encoder setBytes:argument.bytes.data() length:argument.bytes.size() atIndex:i];
+                }
+                for (NSUInteger i = 0; i < item.scratch.size(); ++i) {
+                    [encoder setThreadgroupMemoryLength:((item.scratch[i] + 15) / 16) * 16 atIndex:i];
+                }
+                [encoder dispatchThreads:item.grid threadsPerThreadgroup:item.group];
+            }
+            if (encoder) [encoder endEncoding];
+            [command commit];
+            [command waitUntilCompleted];
+            if ([command status] == MTLCommandBufferStatusError) {
+                throw std::runtime_error("Metal execution failed: " + metalError([command error]));
+            }
+            if (samples && sampleIndex > 0) {
+                if (iterationPasses.empty()) pendingSamples = sampleIndex;
+                else addTimestamps(sampleIndex);
             }
         }
     }
 
-    void runIterations(const Image& image) {
+    void addTimestamps(NSUInteger sampleCount) {
+        NSData* resolved = [samples resolveCounterRange:NSMakeRange(0, sampleCount)];
+        if (!resolved || [resolved length] != sampleCount * sizeof(MTLCounterResultTimestamp)) {
+            throw std::runtime_error("Could not resolve Metal GPU timestamps");
+        }
+        const auto* timestamps = static_cast<const MTLCounterResultTimestamp*>([resolved bytes]);
+        double time = 0.0;
+        for (NSUInteger i = 0; i < sampleCount; i += 2) {
+            const std::uint64_t start = timestamps[i].timestamp;
+            const std::uint64_t end = timestamps[i + 1].timestamp;
+            if (start == MTLCounterErrorValue || end == MTLCounterErrorValue || end < start) {
+                throw std::runtime_error("Invalid Metal GPU timestamp");
+            }
+            time += static_cast<double>(end - start) / 1000.0;
+        }
+        kernelUs += time;
+    }
+
+    double readKernelTime() {
+        if (pendingSamples > 0) {
+            addTimestamps(pendingSamples);
+            pendingSamples = 0;
+        }
+        return kernelUs;
+    }
+
+    id<MTLBuffer> runIterations(const Image& image) {
         iterationCount = 0;
-        if (algorithm == Algorithm::Canny) {
+        const bool canny = algorithm == Algorithm::Canny;
+        const bool pixelSteps = !canny && !parameters.localTiles;
+        const int activeIndex = canny ? 2 : 3;
+        Pass& item = iterationPasses[0];
+        if (canny) {
             std::fill_n(static_cast<int*>([activeA contents]), tilesX * tilesY, 1);
         } else {
             const int seed = image.pixels[static_cast<std::size_t>(parameters.seedY) * width + parameters.seedX];
-            iterationPasses[0].arguments[parameters.localTiles ? 7 : 6] = seed;
+            item.arguments[pixelSteps ? 6 : 7] = seed;
+        }
+        if (pixelSteps) {
+            item.arguments[1] = output;
+            item.arguments[2] = maskB;
+        } else {
+            item.arguments[activeIndex] = activeA;
+            item.arguments[activeIndex + 1] = activeB;
         }
         int* flag = static_cast<int*>([changed contents]);
         bool grow = true;
         while (grow) {
             *flag = 0;
-            const int batch = algorithm == Algorithm::RegionGrowing && parameters.localTiles ? 16 : 1;
-            for (int step = 0; step < batch; ++step) {
-                submit(iterationPasses);
-                Pass& item = iterationPasses[0];
-                if (algorithm == Algorithm::RegionGrowing && !parameters.localTiles) {
-                    std::swap(item.arguments[1], item.arguments[2]);
-                } else {
-                    const int index = algorithm == Algorithm::Canny ? 2 : 3;
-                    std::swap(item.arguments[index], item.arguments[index + 1]);
-                }
+            const int batchSize = !canny && parameters.localTiles ? 16 : 1;
+            std::vector<Pass> batch;
+            batch.reserve(batchSize);
+            for (int step = 0; step < batchSize; ++step) {
+                batch.push_back(item);
+                if (pixelSteps) std::swap(item.arguments[1], item.arguments[2]);
+                else std::swap(item.arguments[activeIndex], item.arguments[activeIndex + 1]);
                 ++iterationCount;
             }
+            submit(batch);
             grow = *flag != 0;
-            if (iterationCount > pixelCount + 16) throw std::runtime_error("Metal region propagation did not converge");
+            if (grow && static_cast<long long>(iterationCount) > static_cast<long long>(pixelCount) + 16) {
+                throw std::runtime_error("Metal region propagation did not converge");
+            }
         }
-        if (algorithm == Algorithm::RegionGrowing && !parameters.localTiles) {
-            std::memcpy([output contents], [iterationPasses[0].arguments[1].buffer contents], pixelCount);
-            iterationPasses[0].arguments[1] = output;
-            iterationPasses[0].arguments[2] = maskB;
-        } else {
-            const int index = algorithm == Algorithm::Canny ? 2 : 3;
-            iterationPasses[0].arguments[index] = activeA;
-            iterationPasses[0].arguments[index + 1] = activeB;
-        }
+        if (canny) return item.arguments[0].buffer;
+        return item.arguments[1].buffer;
     }
 
     void run(const Image& image, Image& destination) {
@@ -460,19 +514,28 @@ struct MetalProcessor::Impl {
         if (image.width != width || image.height != height) {
             throw std::invalid_argument("Image dimensions do not match the Metal buffers");
         }
+        if (algorithm == Algorithm::Threshold) std::memcpy([output contents], image.pixels.data(), pixelCount);
+        else std::memcpy([input contents], image.pixels.data(), pixelCount);
+        destination.pixels.resize(static_cast<std::size_t>(outputWidth) * outputHeight);
         destination.width = outputWidth;
         destination.height = outputHeight;
-        destination.pixels.resize(static_cast<std::size_t>(outputWidth) * outputHeight);
         kernelUs = samples ? 0.0 : -1.0;
-        std::memcpy([input contents], image.pixels.data(), pixelCount);
-        if (algorithm == Algorithm::Threshold) std::memcpy([output contents], [input contents], pixelCount);
+        pendingSamples = 0;
         submit(passes);
-        if (!iterationPasses.empty()) runIterations(image);
+        id<MTLBuffer> finalOutput = output;
+        if (!iterationPasses.empty()) {
+            id<MTLBuffer> propagated = runIterations(image);
+            if (algorithm == Algorithm::Canny) finalPasses[0].arguments[0] = propagated;
+            else finalOutput = propagated;
+        }
         submit(finalPasses);
-        std::memcpy(destination.pixels.data(), [output contents], destination.pixels.size());
+        std::memcpy(destination.pixels.data(), [finalOutput contents], destination.pixels.size());
         if (algorithm == Algorithm::MultiOtsu) {
             const int* values = static_cast<const int*>([result contents]);
             thresholdValues.assign(values, values + parameters.classes - 1);
+            if (thresholdValues.front() < 0) {
+                throw std::invalid_argument("Multi-Otsu needs at least as many distinct brightness levels as classes");
+            }
         } else if (algorithm == Algorithm::PeaksValleys) {
             const int* values = static_cast<const int*>([result contents]);
             iterationCount = values[0];
@@ -485,6 +548,7 @@ struct MetalProcessor::Impl {
 
 MetalProcessor::MetalProcessor(Algorithm algorithm, const Image& image, const Parameters& parameters) {
     @autoreleasepool {
+        checkImage(image);
         impl = std::make_unique<Impl>(algorithm, image, parameters);
     }
 }
@@ -497,7 +561,11 @@ void MetalProcessor::run(const Image& image, Image& output) {
     }
 }
 
-double MetalProcessor::kernelTimeUs() const { return impl->kernelUs; }
+double MetalProcessor::kernelTimeUs() const {
+    @autoreleasepool {
+        return impl->readKernelTime();
+    }
+}
 const std::vector<int>& MetalProcessor::thresholds() const { return impl->thresholdValues; }
 int MetalProcessor::iterations() const { return impl->iterationCount; }
-std::string MetalProcessor::profilingMethod() const { return impl->samples ? "gpu_timestamp_samples" : "unavailable"; }
+std::string MetalProcessor::profilingMethod() const { return impl->samples ? "metal_compute_pass_timestamp_sum" : "unavailable"; }

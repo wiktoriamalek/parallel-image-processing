@@ -13,10 +13,12 @@ Image contrast(const Image& image, float factor)
 
 void contrastRange(const Image& image, Image& output, std::size_t begin, std::size_t end, float factor)
 {
+    const unsigned char* input = image.pixels.data();
+    unsigned char* result = output.pixels.data();
     for (std::size_t i = begin; i < end; ++i) {
-        float scaled = (image.pixels[i] - 128) * factor;
+        float scaled = (input[i] - 128) * factor;
         float value = scaled + 128.0f;
-        output.pixels[i] = static_cast<unsigned char>(std::lround(std::clamp(value, 0.0f, 255.0f)));
+        result[i] = static_cast<unsigned char>(std::round(std::clamp(value, 0.0f, 255.0f)));
     }
 }
 
@@ -43,6 +45,8 @@ ContrastGPU::ContrastGPU(const Image& image, float factor)
         checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
         checkCL(clSetKernelArg(kernel, 1, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
         checkCL(clSetKernelArg(kernel, 2, sizeof(factor), &factor), "clSetKernelArg");
+        const int pixelCount = static_cast<int>(bufferSize);
+        checkCL(clSetKernelArg(kernel, 3, sizeof(pixelCount), &pixelCount), "clSetKernelArg");
     } catch (...) {
         release();
         throw;
@@ -64,6 +68,6 @@ void ContrastGPU::run(const Image& image, Image& output, cl_event* kernelEvent) 
         throw std::runtime_error("Image size does not match the GPU buffers");
     }
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 1, nullptr, &bufferSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
+    enqueueLine(cl.queue, kernel, bufferSize, kernelEvent);
     checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
 }

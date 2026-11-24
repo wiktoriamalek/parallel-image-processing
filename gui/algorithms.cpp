@@ -8,6 +8,7 @@
 #include "contrast.hpp"
 #include "convolution.hpp"
 #include "distortion.hpp"
+#include "gabor.hpp"
 #include "median_filter.hpp"
 #include "negative.hpp"
 #include "otsu.hpp"
@@ -29,6 +30,10 @@ int medianStrip(const Parameters& parameters) {
 
 BrownConradyCoefficients brownConradyCoefficients(const Parameters& parameters) {
     return {parameters.k1, parameters.k2, parameters.k3, parameters.p1, parameters.p2};
+}
+
+GaborBank gaborBank(const Parameters& parameters) {
+    return ::gaborBank(parameters.gaborSigma, parameters.gaborWavelength, parameters.gaborGamma, parameters.gaborOrientations);
 }
 
 template<class GPU>
@@ -126,6 +131,10 @@ Timing runCPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             }, repeats)};
         case Algorithm::Canny:
             return {measure([&] { canny(image, output, parameters.cannyLow, parameters.cannyHigh, threads); }, repeats)};
+        case Algorithm::Gabor: {
+            const GaborBank bank = gaborBank(parameters);
+            return {measure([&] { gaborFilter(image, bank, output, threads); }, repeats)};
+        }
     }
     throw std::logic_error("Unknown algorithm");
 }
@@ -300,6 +309,10 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
             return runRegionGrowingGPU(image, parameters, repeats, output);
         case Algorithm::Canny:
             return runCannyGPU(image, parameters, repeats, output);
+        case Algorithm::Gabor: {
+            GaborGPU gpu(image, gaborBank(parameters));
+            return measureGPU(gpu, image, repeats, output);
+        }
     }
     throw std::logic_error("Unknown algorithm");
 }

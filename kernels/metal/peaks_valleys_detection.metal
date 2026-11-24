@@ -2,22 +2,6 @@
 
 using namespace metal;
 
-inline uint atomic_inc(device uint* target) {
-    return atomic_fetch_add_explicit((device atomic_uint*)target, (uint)1, memory_order_relaxed);
-}
-
-inline uint atomic_add(device uint* target, uint value) {
-    return atomic_fetch_add_explicit((device atomic_uint*)target, value, memory_order_relaxed);
-}
-
-inline uint atomic_inc(threadgroup uint* target) {
-    return atomic_fetch_add_explicit((threadgroup atomic_uint*)target, (uint)1, memory_order_relaxed);
-}
-
-inline uint atomic_add(threadgroup uint* target, uint value) {
-    return atomic_fetch_add_explicit((threadgroup atomic_uint*)target, value, memory_order_relaxed);
-}
-
 inline int atomic_inc(threadgroup int* target) {
     return atomic_fetch_add_explicit((threadgroup atomic_int*)target, (int)1, memory_order_relaxed);
 }
@@ -74,11 +58,8 @@ kernel void peaksValleysThresholdsKernel(
     constant int& maxClasses [[buffer(1)]],
     device int* result [[buffer(2)]],
     device uchar* lookup [[buffer(3)]],
-    uint3 gridPosition [[thread_position_in_grid]],
     uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 groupSize [[threads_per_threadgroup]]
 )
 {
     threadgroup ulong smoothed[2][BINS + 2];

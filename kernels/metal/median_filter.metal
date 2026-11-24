@@ -12,11 +12,7 @@ kernel void median_insertion(
     constant int& width [[buffer(2)]],
     constant int& height [[buffer(3)]],
     constant int& switching [[buffer(4)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     const int x = gridPosition.x;
@@ -64,11 +60,7 @@ kernel void median_network(
     constant int& width [[buffer(2)]],
     constant int& height [[buffer(3)]],
     constant int& switching [[buffer(4)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     const int x = gridPosition.x;

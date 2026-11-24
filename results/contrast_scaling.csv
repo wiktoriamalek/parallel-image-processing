@@ -1,3 +1,3 @@
 image,factor,width,height,threads,repeats,cpu_1t_us,cpu_nt_us,overhead_nt_us,gpu_kernel_us,gpu_total_us
-"images/cms_resolution_change/cms_2048.png",2,2048,2048,11,100,3330.958,589.271,65.6045,210.9375,673.2495
-"images/cms_resolution_change/cms_8192.png",2,8192,8192,11,100,53443.4165,8180.7915,62.792,3417.77083333,6745.979
+"images/cms_resolution_change/cms_2048.png",2,2048,2048,11,100,842.7915,268.937,70,61.0833333333,468.4585
+"images/cms_resolution_change/cms_8192.png",2,8192,8192,11,100,13772.646,2786.6455,62.229,1061,4350.583

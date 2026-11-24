@@ -9,11 +9,7 @@ kernel void resize_nearest(
     constant int& inputHeight [[buffer(3)]],
     constant int& outputWidth [[buffer(4)]],
     constant int& outputHeight [[buffer(5)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     int x = gridPosition.x;
@@ -41,11 +37,7 @@ kernel void resize_bilinear(
     constant int& inputHeight [[buffer(3)]],
     constant int& outputWidth [[buffer(4)]],
     constant int& outputHeight [[buffer(5)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     int x = gridPosition.x;

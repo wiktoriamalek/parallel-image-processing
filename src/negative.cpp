@@ -11,8 +11,10 @@ Image negative(const Image& image)
 
 void negativeRange(const Image& image, Image& output, std::size_t begin, std::size_t end)
 {
+    const unsigned char* input = image.pixels.data();
+    unsigned char* result = output.pixels.data();
     for (std::size_t i = begin; i < end; ++i) {
-        output.pixels[i] = 255 - image.pixels[i];
+        result[i] = 255 - input[i];
     }
 }
 
@@ -38,6 +40,8 @@ NegativeGPU::NegativeGPU(const Image& image)
         checkCL(error, "clCreateKernel");
         checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
         checkCL(clSetKernelArg(kernel, 1, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
+        const int pixelCount = static_cast<int>(bufferSize);
+        checkCL(clSetKernelArg(kernel, 2, sizeof(pixelCount), &pixelCount), "clSetKernelArg");
     } catch (...) {
         release();
         throw;
@@ -59,6 +63,6 @@ void NegativeGPU::run(const Image& image, Image& output, cl_event* kernelEvent) 
         throw std::runtime_error("Image size does not match the GPU buffers");
     }
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 1, nullptr, &bufferSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
+    enqueueLine(cl.queue, kernel, bufferSize, kernelEvent);
     checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer");
 }

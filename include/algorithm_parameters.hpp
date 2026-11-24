@@ -1,7 +1,7 @@
 #pragma once
 
 enum class Algorithm { Threshold, Negative, Contrast, Otsu, MultiOtsu, PeaksValleys, Bernsen, Niblack, Sauvola,
-                       Convolution, MedianFilter, Distortion, Resize, RegionGrowing, Canny };
+                       Convolution, MedianFilter, Distortion, Resize, RegionGrowing, Canny, Gabor };
 struct Parameters {
     int threshold = 128;
     float contrastFactor = 2.0f;
@@ -29,5 +29,9 @@ struct Parameters {
     bool localTiles = true;
     float cannyLow = 50.0f;
     float cannyHigh = 100.0f;
+    float gaborSigma = 2.0f;
+    float gaborWavelength = 6.0f;
+    float gaborGamma = 0.5f;
+    int gaborOrientations = 4;
 };
 

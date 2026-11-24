@@ -3,11 +3,16 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace {
-constexpr double sauvolaStddevRange = 128.0;
+constexpr int sauvolaStddevRange = 128;
+constexpr std::int64_t sauvolaMaxWindowPixels = 1000000;
+constexpr std::int64_t niblackMaxWindowPixels = 10000000;
+constexpr std::int64_t niblackMaxSmallWindowPixels = 160000;
 constexpr int localThresholdGroupWidth = 256;
 constexpr int localThresholdColumnsPerItem = 8;
 constexpr int localThresholdMinBandHeight = 16;
@@ -23,9 +28,9 @@ int localThresholdBandHeight(int radius) {
     return band;
 }
 
-template<class Threshold>
+template<class Classify, class Exact>
 void localThresholdRows(const Image& image, Image& result, int radius, int firstRow, int endRow,
-                        Threshold thresholdFor) {
+                        Classify classify, Exact exact) {
     const int width = image.width;
     const int height = image.height;
     std::vector<std::uint32_t> columnSum(width, 0);
@@ -71,36 +76,126 @@ void localThresholdRows(const Image& image, Image& result, int radius, int first
             }
             const int left = std::max(0, x - radius);
             const int right = std::min(width - 1, x + radius);
-            const double count = static_cast<double>(right - left + 1) * (bottom - top + 1);
-            const double mean = static_cast<double>(sum) / count;
-            const double variance = static_cast<double>(sumOfSquares) / count - mean * mean;
-            const double stddev = std::sqrt(std::max(0.0, variance));
-            const double threshold = thresholdFor(mean, stddev);
+            const std::int64_t count = static_cast<std::int64_t>(right - left + 1) * (bottom - top + 1);
             const auto index = static_cast<std::size_t>(y) * width + x;
-            result.pixels[index] = image.pixels[index] < threshold ? 0 : 255;
+            result.pixels[index] = classify(count, static_cast<std::int64_t>(sum), static_cast<std::int64_t>(sumOfSquares),
+                                            image.pixels[index]);
+        }
+
+        if constexpr (std::is_same_v<Exact, std::nullptr_t>) continue;
+        unsigned char* row = &result.pixels[static_cast<std::size_t>(y) * width];
+        for (auto* unsure = static_cast<unsigned char*>(std::memchr(row, 1, width)); unsure != nullptr;
+             unsure = static_cast<unsigned char*>(std::memchr(unsure + 1, 1, static_cast<std::size_t>(row + width - unsure - 1)))) {
+            const int x = static_cast<int>(unsure - row);
+            const int left = std::max(0, x - radius);
+            const int right = std::min(width - 1, x + radius);
+            std::int64_t windowSum = 0;
+            std::int64_t windowSquares = 0;
+            for (int column = left; column <= right; ++column) {
+                windowSum += columnSum[column];
+                windowSquares += columnSquares[column];
+            }
+            const std::int64_t count = static_cast<std::int64_t>(right - left + 1) * (bottom - top + 1);
+            if constexpr (!std::is_same_v<Exact, std::nullptr_t>) {
+                *unsure = exact(count, windowSum, windowSquares, image.pixels[static_cast<std::size_t>(y) * width + x]) ? 0 : 255;
+            }
         }
     }
 }
 
-template<class Threshold>
-void localThreshold(const Image& image, Image& result, int radius, int threads, Threshold thresholdFor) {
+template<class Classify, class Exact>
+void localThreshold(const Image& image, Image& result, int radius, int threads, Classify classify, Exact exact) {
     if (radius < 0) throw std::invalid_argument("Window radius must be non-negative");
     if (result.pixels.size() != image.pixels.size()) throw std::runtime_error("Output image size does not match the input");
     parallelRanges(image.height, threads, [&](std::size_t begin, std::size_t end, int) {
-        localThresholdRows(image, result, radius, static_cast<int>(begin), static_cast<int>(end), thresholdFor);
+        localThresholdRows(image, result, radius, static_cast<int>(begin), static_cast<int>(end), classify, exact);
     });
 }
+}
+
+int localThresholdHundredths(double k) {
+    const double scaled = k * 100.0;
+    const double rounded = std::round(scaled);
+    if (!std::isfinite(scaled) || rounded < 0.0 || rounded > 100.0 || std::abs(scaled - rounded) > 1e-6) {
+        throw std::invalid_argument("k must be between 0 and 1 with at most two decimal places");
+    }
+    return static_cast<int>(rounded);
+}
+
+static inline bool niblackSmallWindow(std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel,
+                                      std::uint64_t factor) {
+    const std::int64_t difference = 100 * (sum - count * pixel);
+    const std::uint64_t magnitude = static_cast<std::uint64_t>(difference);
+    const std::uint64_t variance = static_cast<std::uint64_t>(count * squares - sum * sum);
+    return (difference > 0) & (magnitude * magnitude > factor * variance);
+}
+
+bool niblackIsBlack(std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel, int hundredthsK) {
+    const std::int64_t factor = static_cast<std::int64_t>(hundredthsK) * hundredthsK;
+    if (count <= niblackMaxSmallWindowPixels) {
+        return niblackSmallWindow(count, sum, squares, pixel, static_cast<std::uint64_t>(factor));
+    }
+    const std::int64_t difference = 100 * (sum - count * pixel);
+    const std::int64_t variance = count * squares - sum * sum;
+    return difference > 0 && static_cast<__int128>(difference) * difference > static_cast<__int128>(factor) * variance;
+}
+
+static inline unsigned char sauvolaClassify(std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel,
+                                            int hundredthsK) {
+    const std::int64_t variance = count * squares - sum * sum;
+    const double n = static_cast<double>(count);
+    const double s = static_cast<double>(sum);
+    const double left = n * sauvolaStddevRange * (100.0 * n * pixel - (100 - hundredthsK) * s);
+    const double right = s * hundredthsK;
+    const double leftSquared = left * left;
+    const double rightSquared = right * right * static_cast<double>(variance);
+    const double difference = leftSquared - rightSquared;
+    const bool unsure = (left >= 0.0) & (std::abs(difference) <= 1e-9 * (leftSquared + rightSquared));
+    const bool black = (left < 0.0) | (difference < 0.0);
+    return unsure ? 1 : (black ? 0 : 255);
+}
+
+bool sauvolaIsBlack(std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel, int hundredthsK) {
+    const unsigned char code = sauvolaClassify(count, sum, squares, pixel, hundredthsK);
+    if (code != 1) return code == 0;
+    const std::int64_t left = count * sauvolaStddevRange * (100 * count * pixel - (100 - hundredthsK) * sum);
+    const std::int64_t variance = count * squares - sum * sum;
+    const std::int64_t right = sum * hundredthsK;
+    return left < 0 || static_cast<__int128>(left) * left < static_cast<__int128>(right) * right * variance;
+}
+
+static std::int64_t windowPixels(const Image& image, int radius) {
+    const std::int64_t side = 2 * static_cast<std::int64_t>(radius) + 1;
+    return std::min<std::int64_t>(side, image.width) * std::min<std::int64_t>(side, image.height);
 }
 
 void niblackThreshold(const Image& image, Image& result, int radius, double k, int threads) {
-    localThreshold(image, result, radius, threads, [k](double mean, double stddev) {
-        return mean - k * stddev;
-    });
+    const int hundredthsK = localThresholdHundredths(k);
+    const std::int64_t pixels = radius >= 0 ? windowPixels(image, radius) : 0;
+    if (pixels > niblackMaxWindowPixels) {
+        throw std::invalid_argument("Niblack window has too many pixels for exact thresholding");
+    }
+    if (pixels <= niblackMaxSmallWindowPixels) {
+        const auto factor = static_cast<std::uint64_t>(hundredthsK) * static_cast<std::uint64_t>(hundredthsK);
+        localThreshold(image, result, radius, threads, [factor](std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel) {
+            return static_cast<unsigned char>(niblackSmallWindow(count, sum, squares, pixel, factor) ? 0 : 255);
+        }, nullptr);
+        return;
+    }
+    localThreshold(image, result, radius, threads, [hundredthsK](std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel) {
+        return static_cast<unsigned char>(niblackIsBlack(count, sum, squares, pixel, hundredthsK) ? 0 : 255);
+    }, nullptr);
 }
 
 void sauvolaThreshold(const Image& image, Image& result, int radius, double k, int threads) {
-    localThreshold(image, result, radius, threads, [k](double mean, double stddev) {
-        return mean * (1.0 + k * (stddev / sauvolaStddevRange - 1.0));
+    const int hundredthsK = localThresholdHundredths(k);
+    if (radius >= 0 && windowPixels(image, radius) > sauvolaMaxWindowPixels) {
+        throw std::invalid_argument("Sauvola window has too many pixels for exact thresholding");
+    }
+    localThreshold(image, result, radius, threads, [hundredthsK](std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel) {
+        return sauvolaClassify(count, sum, squares, pixel, hundredthsK);
+    }, [hundredthsK](std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel) {
+        return sauvolaIsBlack(count, sum, squares, pixel, hundredthsK);
     });
 }
 
@@ -126,7 +221,7 @@ LocalThresholdGPU::LocalThresholdGPU(const Image& image, LocalThresholdMethod me
         checkCL(error, "clCreateBuffer");
         kernel = clCreateKernel(cl.program, method == LocalThresholdMethod::Niblack ? "niblack" : "sauvola", &error);
         checkCL(error, "clCreateKernel");
-        const float factor = static_cast<float>(k);
+        const float factor = static_cast<float>(localThresholdHundredths(k)) / 100.0f;
         const float stddevRange = static_cast<float>(sauvolaStddevRange);
         const std::size_t localBytes = (outputColumns + 2 * radius) * sizeof(cl_uint);
         checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
@@ -187,14 +282,14 @@ void bernsenRows(const Image &image, Image &result, int radius, int minContrast,
                 }
             }
             int contrast = Jmax - Jmin;
+            int sum = Jmax + Jmin;
             if (contrast < minContrast) {
-                result.pixels[y*image.width + x] = 0;
+                result.pixels[y*image.width + x] = sum < 256 ? 0 : 255;
             }
             else {
-                int threshold = (Jmax + Jmin)/2;
                 int pixel = image.pixels[y*image.width + x];
                 //result.pixels[y*image.width + x] = pixel < threshold ? 0 : 255; // Andrea Latina speaking....
-                if (pixel < threshold) {
+                if (2 * pixel < sum) {
                     result.pixels[y*image.width + x] = 0;
                 }
 
@@ -323,8 +418,8 @@ void bernsenRowRange(const Image& image, Image& result, int radius, int minContr
             for (int x = 0; x < width; ++x) {
                 const int Jmin = std::min(suffixLow[x], prefixLow[x]);
                 const int Jmax = std::max(suffixHigh[x], prefixHigh[x]);
-                const int threshold = (Jmax + Jmin) / 2;
-                output[x] = Jmax - Jmin < minContrast || pixels[x] < threshold ? 0 : 255;
+                const int sum = Jmax + Jmin;
+                output[x] = (Jmax - Jmin < minContrast ? sum < 256 : 2 * pixels[x] < sum) ? 0 : 255;
             }
         }
         suffixInPlace(scratch.next, window, width);
@@ -409,9 +504,15 @@ void BernsenGPU::run(const Image& image, Image& output, cl_event* rowEvent, cl_e
     const std::size_t columnGlobal[2] = {(globalWorkSize[0] + bernsenTileColumns - 1) / bernsenTileColumns * bernsenTileColumns,
                                          (globalWorkSize[1] + bernsenTileRows - 1) / bernsenTileRows * bernsenTileLanes};
     const std::size_t columnGroup[2] = {bernsenTileColumns, bernsenTileLanes};
-    checkCL(clEnqueueNDRangeKernel(cl.queue, rowKernel, 2, nullptr, rowLocal ? rowGlobal : globalWorkSize,
-                                   rowLocal ? rowGroup : nullptr, 0, nullptr, rowEvent), "clEnqueueNDRangeKernel");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, columnKernel, 2, nullptr, columnLocal ? columnGlobal : globalWorkSize,
-                                   columnLocal ? columnGroup : nullptr, 0, nullptr, columnEvent), "clEnqueueNDRangeKernel");
+    if (rowLocal) {
+        checkCL(clEnqueueNDRangeKernel(cl.queue, rowKernel, 2, nullptr, rowGlobal, rowGroup, 0, nullptr, rowEvent), "clEnqueueNDRangeKernel");
+    } else {
+        enqueueTiles(cl.queue, rowKernel, globalWorkSize[0], globalWorkSize[1], rowEvent);
+    }
+    if (columnLocal) {
+        checkCL(clEnqueueNDRangeKernel(cl.queue, columnKernel, 2, nullptr, columnGlobal, columnGroup, 0, nullptr, columnEvent), "clEnqueueNDRangeKernel");
+    } else {
+        enqueueTiles(cl.queue, columnKernel, globalWorkSize[0], globalWorkSize[1], columnEvent);
+    }
     checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
 }

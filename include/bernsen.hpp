@@ -2,6 +2,11 @@
 #include "image.hpp"
 #include "opencl_utils.hpp"
 #include <cstddef>
+#include <cstdint>
+
+int localThresholdHundredths(double k);
+bool niblackIsBlack(std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel, int hundredthsK);
+bool sauvolaIsBlack(std::int64_t count, std::int64_t sum, std::int64_t squares, int pixel, int hundredthsK);
 
 void bernsenRows(const Image& image, Image& result, int radius, int minContrast, int firstRow, int endRow);
 void bernsenThreshold(const Image& image, Image& result, int radius, int minContrast, int threads = 1);

@@ -48,8 +48,16 @@ void convolutionRows(const Image& image, const std::array<std::array<float, 3>, 
     // y = 1...height-2
     // x = 1 ... width -2
 
+    const unsigned char* pixels = image.pixels.data();
+    unsigned char* output = result.pixels.data();
+    const int width = image.width;
+    float weights[3][3];
+    for (int row = 0; row < 3; row++) {
+        for (int column = 0; column < 3; column++) weights[row][column] = kernel[row][column];
+    }
+
     for (int y=firstRow; y<endRow; y++) {
-        for (int x=1; x<image.width-1; x++) {
+        for (int x=1; x<width-1; x++) {
             float sum = 0.0f;
             // even though images are 2D, pixels are stored as one big 1D array
             // 0 1 2 3 4
@@ -62,19 +70,19 @@ void convolutionRows(const Image& image, const std::array<std::array<float, 3>, 
                 for (int kx=-1; kx<=1; kx++) {
                     int neighourX = x + kx;
                     int neighourY = y + ky;
-                    std::size_t neighbourIndex = neighourY * image.width + neighourX;
+                    std::size_t neighbourIndex = neighourY * width + neighourX;
                     // neighbour value * kernel weight
-                    float neighbourValue = image.pixels[neighbourIndex];
-                    sum += neighbourValue * kernel[ky+1][kx+1];
+                    float neighbourValue = pixels[neighbourIndex];
+                    sum += neighbourValue * weights[ky+1][kx+1];
                 }
             }
-            std::size_t resultIndex = y * image.width + x;
+            std::size_t resultIndex = y * width + x;
             if (absoluteValue) {
                 sum = std::abs(sum);
             }
 
             sum = std::clamp(sum, 0.0f, 255.0f);
-            result.pixels[resultIndex] = static_cast<unsigned char>(sum);
+            output[resultIndex] = static_cast<unsigned char>(std::round(sum));
         }
     }
 
@@ -128,7 +136,7 @@ void ConvolutionGPU::run(const Image& image, Image& output, cl_event* kernelEven
         throw std::runtime_error("Image dimensions do not match the GPU buffers");
     }
     checkCL(clEnqueueWriteBuffer(cl.queue, inputBuffer, CL_TRUE, 0, bufferSize, image.pixels.data(), 0, nullptr, nullptr), "clEnqueueWriteBuffer");
-    checkCL(clEnqueueNDRangeKernel(cl.queue, kernel, 2, nullptr, globalWorkSize, nullptr, 0, nullptr, kernelEvent), "clEnqueueNDRangeKernel");
+    enqueueTiles(cl.queue, kernel, globalWorkSize[0], globalWorkSize[1], kernelEvent);
     checkCL(clFinish(cl.queue), "clFinish");
     checkCL(clEnqueueReadBuffer(cl.queue, outputBuffer, CL_TRUE, 0, bufferSize, output.pixels.data(), 0, nullptr, nullptr), "clEnqueueReadBuffer"); // CL_TRUE means: dont return from clEnqueueReadBuffer until the readout is done
 }

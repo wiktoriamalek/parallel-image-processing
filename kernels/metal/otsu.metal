@@ -14,27 +14,11 @@ inline uint atomic_inc(threadgroup uint* target) {
     return atomic_fetch_add_explicit((threadgroup atomic_uint*)target, (uint)1, memory_order_relaxed);
 }
 
-inline uint atomic_add(threadgroup uint* target, uint value) {
-    return atomic_fetch_add_explicit((threadgroup atomic_uint*)target, value, memory_order_relaxed);
-}
-
-inline int atomic_inc(threadgroup int* target) {
-    return atomic_fetch_add_explicit((threadgroup atomic_int*)target, (int)1, memory_order_relaxed);
-}
-
-inline int atomic_add(threadgroup int* target, int value) {
-    return atomic_fetch_add_explicit((threadgroup atomic_int*)target, value, memory_order_relaxed);
-}
-
 kernel void histogramKernel(
     device const unsigned char* input [[buffer(0)]],
     device unsigned int* histogram [[buffer(1)]],
     constant int& Npixels [[buffer(2)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     int i = gridPosition.x; 
@@ -51,12 +35,8 @@ kernel void thresholdKernel(
     device unsigned char* output [[buffer(1)]],
     constant int& Npixels [[buffer(2)]],
     device const int* threshold [[buffer(3)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
-) 
+    uint3 gridPosition [[thread_position_in_grid]]
+)
 {
     int i = gridPosition.x;
     if (i >= Npixels) {return;}
@@ -78,8 +58,6 @@ kernel void histogramLocalKernel(
     constant int& Npixels [[buffer(2)]],
     uint3 gridPosition [[thread_position_in_grid]],
     uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
     uint3 gridSize [[threads_per_grid]]
 )
 {
@@ -88,7 +66,7 @@ kernel void histogramLocalKernel(
     localHistogram[bin] = 0;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (int i = gridPosition.x; i < Npixels; i+=gridSize.x)
+    for (size_t i = gridPosition.x; i < (size_t)Npixels; i += gridSize.x)
     {
         unsigned char intensity = input[i];
         atomic_inc(&localHistogram[intensity]);
@@ -99,11 +77,7 @@ kernel void histogramLocalKernel(
 
 kernel void clearHistogramKernel(
     device unsigned int* histogram [[buffer(0)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     histogram[gridPosition.x] = 0;
@@ -112,11 +86,7 @@ kernel void clearHistogramKernel(
 kernel void otsuThresholdKernel(
     device const unsigned int* histogram [[buffer(0)]],
     device int* threshold [[buffer(1)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     int t = gridPosition.x;
@@ -174,11 +144,7 @@ kernel void multiOtsuApplyLookupKernel(
     device uchar* output [[buffer(1)]],
     constant int& pixelCount [[buffer(2)]],
     device const uchar* lookup [[buffer(3)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 gridPosition [[thread_position_in_grid]]
 )
 {
     const size_t i = gridPosition.x;
@@ -203,11 +169,7 @@ kernel void multiOtsuPrefixKernel(
     device ulong* prefixCount [[buffer(1)]],
     device long* prefixCenteredSum [[buffer(2)]],
     device float* layers [[buffer(3)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 localPosition [[thread_position_in_threadgroup]]
 )
 {
     threadgroup unsigned int localHistogram[256];
@@ -249,11 +211,8 @@ kernel void multiOtsuLayerKernel(
     device ushort* split [[buffer(3)]],
     constant int& k [[buffer(4)]],
     constant int& firstEnd [[buffer(5)]],
-    uint3 gridPosition [[thread_position_in_grid]],
     uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 groupPosition [[threadgroup_position_in_grid]]
 )
 {
     threadgroup float values[256];
@@ -296,11 +255,7 @@ kernel void multiOtsuLookupTableKernel(
     constant int& classes [[buffer(2)]],
     device int* thresholds [[buffer(3)]],
     device uchar* lookup [[buffer(4)]],
-    uint3 gridPosition [[thread_position_in_grid]],
-    uint3 localPosition [[thread_position_in_threadgroup]],
-    uint3 groupPosition [[threadgroup_position_in_grid]],
-    uint3 groupSize [[threads_per_threadgroup]],
-    uint3 gridSize [[threads_per_grid]]
+    uint3 localPosition [[thread_position_in_threadgroup]]
 )
 {
     threadgroup int localThresholds[255];

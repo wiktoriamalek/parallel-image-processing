@@ -190,6 +190,8 @@ if(APPLE)
     target_compile_definitions(metal_comparison PRIVATE IMAGE_BUILD_TYPE="$<CONFIG>")
     add_executable(opencv_comparison tests/opencv_comparison.cpp)
     target_link_libraries(opencv_comparison PRIVATE algorithm_benchmarking)
+    add_executable(convolution_local_memory tests/convolution_local_memory.cpp)
+    target_link_libraries(convolution_local_memory PRIVATE algorithm_benchmarking)
 endif()
 
 if(Qt6_FOUND)

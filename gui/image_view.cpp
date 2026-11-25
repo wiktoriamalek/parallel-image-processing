@@ -44,11 +44,11 @@ void ImageView::paintEvent(QPaintEvent*) {
     QPainterPath clip;
     clip.addRoundedRect(QRectF(rect()), 8, 8);
     painter.setClipPath(clip);
-    painter.fillRect(rect(), QColor("#0b111b"));
+    painter.fillRect(rect(), QColor("#ebece6"));
     if (pixmap.isNull()) {
         const QPointF center = QRectF(rect()).center() - QPointF(0, 20);
         const QRectF icon(center.x() - 24, center.y() - 20, 48, 40);
-        painter.setPen(QPen(QColor("#3d526f"), 1.5));
+        painter.setPen(QPen(QColor("#87947e"), 1.5));
         painter.drawRoundedRect(icon, 5, 5);
         painter.drawEllipse(QPointF(icon.left() + 13, icon.top() + 12), 3, 3);
         QPainterPath mountains;
@@ -58,7 +58,7 @@ void ImageView::paintEvent(QPaintEvent*) {
         mountains.lineTo(icon.left() + 34, icon.top() + 20);
         mountains.lineTo(icon.right() - 5, icon.bottom() - 8);
         painter.drawPath(mountains);
-        painter.setPen(QColor("#8fa2bd"));
+        painter.setPen(QColor("#626e5d"));
         painter.drawText(QRectF(16, center.y() + 34, width() - 32, 50), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, emptyText);
         return;
     }

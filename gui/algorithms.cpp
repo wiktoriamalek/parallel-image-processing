@@ -280,7 +280,7 @@ Timing runGPU(Algorithm algorithm, const Image& image, const Parameters& paramet
         }
         case Algorithm::Convolution: {
             const ConvolutionFilter& selected = convolutionFilters().at(parameters.filter);
-            ConvolutionGPU gpu(image, selected.kernel, selected.absoluteValue);
+            ConvolutionGPU gpu(image, selected.kernel, selected.absoluteValue, parameters.convolutionLocalTile);
             return measureGPU(gpu, image, repeats, output);
         }
         case Algorithm::MedianFilter: {

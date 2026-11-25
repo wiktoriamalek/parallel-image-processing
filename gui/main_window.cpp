@@ -661,12 +661,12 @@ void MainWindow::runFinished() {
             auto* item = new QTableWidgetItem(cells[column]);
             if (column >= 4) item->setToolTip(cells[column]);
             if (column >= 1 && column <= 3) item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            if (column == 4 && comparison == "identyczny") item->setForeground(QColor("#7ad8bd"));
+            if (column == 4 && comparison == "identyczny") item->setForeground(QColor("#356b43"));
             if (column == 1 && &result == &*fastest) {
                 QFont font = item->font();
                 font.setBold(true);
                 item->setFont(font);
-                item->setForeground(QColor("#7ad8bd"));
+                item->setForeground(QColor("#356b43"));
                 item->setToolTip("Najkrótszy czas całkowity w tym pomiarze");
             }
             table->setItem(row, column, item);

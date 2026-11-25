@@ -355,7 +355,8 @@ struct MetalProcessor::Impl {
                 const auto& filter = convolutionFilters().at(parameters.filter);
                 id<MTLBuffer> coefficients = buffer(9 * sizeof(float));
                 std::memcpy([coefficients contents], filter.kernel.data(), 9 * sizeof(float));
-                passes.push_back(pass("convolution3x3", {input, output, width, height, coefficients, static_cast<int>(filter.absoluteValue)}, grid));
+                passes.push_back(pass(parameters.convolutionLocalTile ? "convolution3x3_local" : "convolution3x3",
+                                     {input, output, width, height, coefficients, static_cast<int>(filter.absoluteValue)}, grid));
                 break;
             }
             case Algorithm::MedianFilter:

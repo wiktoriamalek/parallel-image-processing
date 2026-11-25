@@ -21,7 +21,8 @@ void convolutionRows(const Image& image, const std::array<std::array<float, 3>, 
 
 class ConvolutionGPU {
 public:
-    ConvolutionGPU(const Image& image, const std::array<std::array<float, 3>, 3>& filter, bool absoluteValue);
+    ConvolutionGPU(const Image& image, const std::array<std::array<float, 3>, 3>& filter, bool absoluteValue,
+                   bool localTile = false);
     ~ConvolutionGPU();
     ConvolutionGPU(const ConvolutionGPU&) = delete;
     ConvolutionGPU& operator=(const ConvolutionGPU&) = delete;

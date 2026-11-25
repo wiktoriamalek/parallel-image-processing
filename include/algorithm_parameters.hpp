@@ -27,6 +27,7 @@ struct Parameters {
     int seedY = 0;
     int tolerance = 20;
     bool localTiles = true;
+    bool convolutionLocalTile = false;
     float cannyLow = 50.0f;
     float cannyHigh = 100.0f;
     float gaborSigma = 2.0f;

@@ -88,7 +88,8 @@ void convolutionRows(const Image& image, const std::array<std::array<float, 3>, 
 
 }
 
-ConvolutionGPU::ConvolutionGPU(const Image& image, const std::array<std::array<float, 3>, 3>& filter, bool absoluteValue)
+ConvolutionGPU::ConvolutionGPU(const Image& image, const std::array<std::array<float, 3>, 3>& filter, bool absoluteValue,
+                               bool localTile)
     : cl("kernels/convolution.cl"),
       bufferSize(image.pixels.size()),
       globalWorkSize{static_cast<std::size_t>(image.width), static_cast<std::size_t>(image.height)} {
@@ -105,7 +106,7 @@ ConvolutionGPU::ConvolutionGPU(const Image& image, const std::array<std::array<f
         checkCL(error, "clCreateBuffer");
         filterBuffer = clCreateBuffer(cl.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(gpuFilter), gpuFilter.data(), &error); // create a memory on GPU and copy 9 elements there
         checkCL(error, "clCreateBuffer");
-        kernel = clCreateKernel(cl.program, "convolution3x3", &error);
+        kernel = clCreateKernel(cl.program, localTile ? "convolution3x3_local" : "convolution3x3", &error);
         checkCL(error, "clCreateKernel");
         checkCL(clSetKernelArg(kernel, 0, sizeof(inputBuffer), &inputBuffer), "clSetKernelArg");
         checkCL(clSetKernelArg(kernel, 1, sizeof(outputBuffer), &outputBuffer), "clSetKernelArg");
